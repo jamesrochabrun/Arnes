@@ -13,10 +13,13 @@ architecture; [INSTRUCTIONS.md](INSTRUCTIONS.md) if you're contributing.
 
 ```bash
 git clone https://github.com/jamesrochabrun/Arnes && cd Arnes
-swift build -c release
+./scripts/install.sh            # builds release + installs to /opt/homebrew/bin (pass a dir to override)
 export OPENROUTER_API_KEY=sk-or-...
-.build/release/arnes --help
+arnes --help
 ```
+
+(The script removes the old binary and ad-hoc re-signs the new one — overwriting a signed
+binary in place gets it SIGKILLed on Apple Silicon.)
 
 ## Use
 
