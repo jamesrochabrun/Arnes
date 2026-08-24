@@ -54,6 +54,7 @@ Sources/ArnesKit/
   Panel.swift              # loop 2: --panel N — snapshot workdirs, parallel candidates, judge, winner sync
   MessagesDialect.swift    # /messages native path: chat history → Anthropic shapes + stream accumulator
   ResponsesDialect.swift   # /responses native path: chat history → OpenAI shapes + stream accumulator
+  DialectVerdict.swift     # conformance verdicts → ~/.arnes/dialects.jsonl; auto pins broken natives to chat
 Sources/arnes/             # the CLI
   ArnesCommand.swift       # root: interactive (default) · chat · do · models · status · runs · sessions
   Interactive.swift        # REPL: turns, slash commands, SIGINT→cancel, TerminalPermissions
@@ -102,7 +103,13 @@ Sources/arnes/             # the CLI
       request (`MessagesDialect`/`ResponsesDialect`), so cross-dialect `/model` swaps keep
       working; `RunRecord.dialect`/`EvalOutcome.dialect` record what actually executed.
       Live A/B on evals/basics: haiku native = same pass rate, −15% cost, −14% time.
-- [ ] Conformance probe + cached model profiles
+- [x] Conformance probe — optimistic: every clean native step records an ok verdict and a
+      native failure *before any output* records failed + falls back to chat mid-turn
+      (`.dialectFellBack` event), so the probe costs zero extra requests on the happy path.
+      Verdicts live in ~/.arnes/dialects.jsonl (latest wins, failures expire after 7 days);
+      `.auto` consults them, forced `--dialect` ignores them. `arnes probe <model>` checks a
+      model explicitly with one echo-tool round-trip.
+- [ ] Cached model profiles (manifest still fetched per process)
 - [ ] Panel policy triggers (e.g. auto-panel after verifier rejections); `subtask` tool (nested Session)
 - [ ] MCP tool provider (`~/.arnes/mcp.json`)
 - [ ] Scoreboard-driven routing defaults; gated pack proposals

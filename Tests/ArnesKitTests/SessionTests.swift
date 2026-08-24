@@ -203,6 +203,8 @@ final class SessionTests: XCTestCase {
       service: mock,
       tools: [],
       store: tempRecordStore(),
+      dialectStore: DialectVerdictStore(url: FileManager.default.temporaryDirectory
+        .appendingPathComponent("arnes-swap-verdicts-\(UUID().uuidString).jsonl")),
       configuration: .init(model: "alpha/one"))
 
     _ = try await drain(await session.send("turn one"))

@@ -104,7 +104,7 @@ Code and Codex CLI — with `ARNES_MODEL` selecting the model per run.
   (user-overridable at `~/.arnes/packs/`), six tools, session transcripts
   (`~/.arnes/sessions/`), and the `RunRecord` eval substrate (`~/.arnes/runs.jsonl`).
 - **`arnes`** (CLI): `interactive` (default) · `chat` · `do` · `models` · `status` · `runs`
-  · `sessions`.
+  · `sessions` · `eval` · `probe`.
 - Built on [OpenRouterSwift](https://github.com/jamesrochabrun/OpenRouterSwift) — usage cost
   tracked per request, model fallbacks on every call.
 - **Routing visibility**: every response reports the model that actually served it
@@ -116,6 +116,9 @@ Code and Codex CLI — with `ARNES_MODEL` selecting the model per run.
   with `--dialect` for A/Bs. History stays chat-shaped internally and is translated per
   request, so `/model` swaps work *across* dialects mid-conversation. On the starter suite,
   claude-haiku-4.5 native vs chat: same 8/8 pass, −15% cost, −11% steps, −14% time.
+  Conformance is self-checking: clean native runs record an ok verdict, a misbehaving
+  native endpoint falls back to chat mid-turn and is remembered (`~/.arnes/dialects.jsonl`,
+  failures retried after 7 days) — `arnes probe <model>` checks a model explicitly.
 
 ## Status
 

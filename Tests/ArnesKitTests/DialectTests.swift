@@ -8,6 +8,11 @@ final class NativeDialectTests: XCTestCase {
       .appendingPathComponent("arnes-dialect-runs-\(UUID().uuidString).jsonl"))
   }
 
+  private func tempDialectStore() -> DialectVerdictStore {
+    DialectVerdictStore(url: FileManager.default.temporaryDirectory
+      .appendingPathComponent("arnes-dialect-verdicts-\(UUID().uuidString).jsonl"))
+  }
+
   private func tempDir() throws -> URL {
     let url = FileManager.default.temporaryDirectory
       .appendingPathComponent("arnes-dialect-\(UUID().uuidString)")
@@ -164,6 +169,7 @@ final class NativeDialectTests: XCTestCase {
       service: mock,
       tools: [WriteFileTool(root: root)],
       store: tempRecordStore(),
+      dialectStore: tempDialectStore(),
       configuration: .init(model: "anthropic/claude-test"))
 
     _ = try await drain(await session.send("write out.txt"))
@@ -217,6 +223,7 @@ final class NativeDialectTests: XCTestCase {
       service: mock,
       tools: [WriteFileTool(root: root)],
       store: tempRecordStore(),
+      dialectStore: tempDialectStore(),
       configuration: .init(model: "openai/gpt-test"))
 
     _ = try await drain(await session.send("write out.txt"))
@@ -251,6 +258,7 @@ final class NativeDialectTests: XCTestCase {
       service: mock,
       tools: [],
       store: tempRecordStore(),
+      dialectStore: tempDialectStore(),
       configuration: .init(model: "anthropic/claude-test", dialect: .chat))
 
     _ = try await drain(await session.send("say hi"))

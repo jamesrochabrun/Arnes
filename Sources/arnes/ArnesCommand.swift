@@ -30,7 +30,7 @@ struct Arnes: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "arnes",
     abstract: "Arnes — a model-adaptive agent harness for OpenRouter.",
-    subcommands: [Interactive.self, Chat.self, Do.self, Models.self, Status.self, Runs.self, Sessions.self, Eval.self],
+    subcommands: [Interactive.self, Chat.self, Do.self, Models.self, Status.self, Runs.self, Sessions.self, Eval.self, Probe.self],
     defaultSubcommand: Interactive.self)
 }
 
@@ -135,6 +135,8 @@ struct Do: AsyncParsableCommand {
           print(passed ? "✔ \(verdict)" : "✘ \(verdict)")
         case .routed(let model, let provider):
           print("⇄ routed to \(model)\(provider.map { " (\($0))" } ?? "")")
+        case .dialectFellBack(let dialect, let reason):
+          print("⤵ \(dialect) dialect failed (\(reason.prefix(80))) — fell back to chat")
         case .compacted(let summarized, _):
           print("◈ compacted \(summarized) older messages")
         case .textDelta, .reasoningDelta, .interrupted, .turnFinished:

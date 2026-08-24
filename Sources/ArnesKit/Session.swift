@@ -86,6 +86,7 @@ public actor Session {
   private let permissions: any PermissionDelegate
   private let store: RunRecordStore
   private let sessionStore: SessionStore?
+  private let dialectStore: DialectVerdictStore
   private let fallbackModels: [String]
   private let maxStepsPerTurn: Int
   private let dialectOverride: DialectOverride
@@ -110,6 +111,7 @@ public actor Session {
     permissions: any PermissionDelegate = AutoApprovePermissions(),
     store: RunRecordStore = RunRecordStore(),
     sessionStore: SessionStore? = nil,
+    dialectStore: DialectVerdictStore = DialectVerdictStore(),
     configuration: Configuration = Configuration())
   {
     id = UUID().uuidString
@@ -122,6 +124,7 @@ public actor Session {
     self.permissions = permissions
     self.store = store
     self.sessionStore = sessionStore
+    self.dialectStore = dialectStore
     fallbackModels = configuration.fallbackModels
     maxStepsPerTurn = configuration.maxStepsPerTurn
     dialectOverride = configuration.dialect
@@ -137,6 +140,7 @@ public actor Session {
     permissions: any PermissionDelegate = AutoApprovePermissions(),
     store: RunRecordStore = RunRecordStore(),
     sessionStore: SessionStore? = nil,
+    dialectStore: DialectVerdictStore = DialectVerdictStore(),
     configuration: Configuration = Configuration())
   {
     id = loaded.meta.id
@@ -149,6 +153,7 @@ public actor Session {
     self.permissions = permissions
     self.store = store
     self.sessionStore = sessionStore
+    self.dialectStore = dialectStore
     fallbackModels = configuration.fallbackModels
     maxStepsPerTurn = configuration.maxStepsPerTurn
     dialectOverride = configuration.dialect
@@ -352,8 +357,14 @@ public actor Session {
         keptMessages: result.keptMessages))
     }
 
-    // The dialect actually executed this turn — recorded, not just preferred.
-    let dialect = dialectOverride.effective(for: profile)
+    // The dialect actually executed this turn — recorded, not just preferred. A fresh
+    // failed conformance verdict pins `.auto` to chat before the first request.
+    var dialect = dialectOverride.effective(for: profile)
+    if dialectOverride == .auto, dialect != .chat,
+       dialectStore.isKnownBad(model: model, dialect: dialect)
+    {
+      dialect = .chat
+    }
     var record = RunRecord(
       task: text,
       model: model,
@@ -378,7 +389,7 @@ public actor Session {
       }
       record.steps += 1
 
-      let step: StepOutcome
+      var step: StepOutcome
       do {
         step = try await streamStep(
           dialect: dialect,
@@ -389,6 +400,36 @@ public actor Session {
       } catch {
         turnError = error
         break loop
+      }
+
+      if dialect != .chat {
+        if let failure = step.failure {
+          // The native endpoint misbehaved. Record it either way; rerun this step on
+          // chat only when nothing streamed yet (a mid-stream retry would duplicate
+          // output) and the user didn't force the dialect.
+          dialectStore.record(model: model, dialect: dialect, ok: false, reason: failure)
+          guard dialectOverride == .auto, !step.emittedOutput, !step.interrupted else {
+            turnError = DialectError.nativeDialectFailed(dialect.rawValue, failure)
+            break loop
+          }
+          continuation.yield(.dialectFellBack(dialect: dialect.rawValue, reason: failure))
+          dialect = .chat
+          record.dialect = Dialect.chat.rawValue
+          do {
+            step = try await streamStep(
+              dialect: .chat,
+              pack: pack,
+              profile: profile,
+              knownRouted: record.routedModels,
+              continuation: continuation)
+          } catch {
+            turnError = error
+            break loop
+          }
+        } else if !step.interrupted {
+          // A clean native step is the conformance probe, for free.
+          dialectStore.record(model: model, dialect: dialect, ok: true)
+        }
       }
 
       for served in step.routed where !record.routedModels.contains(served) {
@@ -513,6 +554,12 @@ public actor Session {
     /// Served models observed this step, in order.
     var routed: [String] = []
     var interrupted = false
+    /// Native-endpoint misbehavior (thrown transport error or a failed response).
+    /// Chat steps never set this — chat is the floor there's no falling back from.
+    var failure: String?
+    /// Whether any text/reasoning delta reached the caller (a fallback rerun after
+    /// output would duplicate what the user already saw).
+    var emittedOutput = false
   }
 
   private func streamStep(
@@ -558,7 +605,7 @@ public actor Session {
         noteRouted(
           accumulator.routedModel, provider: accumulator.provider,
           outcome: &outcome, knownRouted: knownRouted, continuation: continuation)
-        yieldDeltas(text: deltas.text, reasoning: deltas.reasoning, continuation: continuation)
+        yieldDeltas(text: deltas.text, reasoning: deltas.reasoning, outcome: &outcome, continuation: continuation)
       }
     } catch is CancellationError {
       outcome.interrupted = true
@@ -593,10 +640,12 @@ public actor Session {
         noteRouted(
           accumulator.routedModel, provider: nil,
           outcome: &outcome, knownRouted: knownRouted, continuation: continuation)
-        yieldDeltas(text: deltas.text, reasoning: deltas.reasoning, continuation: continuation)
+        yieldDeltas(text: deltas.text, reasoning: deltas.reasoning, outcome: &outcome, continuation: continuation)
       }
     } catch is CancellationError {
       outcome.interrupted = true
+    } catch {
+      outcome.failure = "\(error)"
     }
     outcome.text = accumulator.text
     outcome.toolCalls = accumulator.toolCalls
@@ -627,13 +676,15 @@ public actor Session {
         noteRouted(
           accumulator.routedModel, provider: nil,
           outcome: &outcome, knownRouted: knownRouted, continuation: continuation)
-        yieldDeltas(text: deltas.text, reasoning: deltas.reasoning, continuation: continuation)
+        yieldDeltas(text: deltas.text, reasoning: deltas.reasoning, outcome: &outcome, continuation: continuation)
       }
     } catch is CancellationError {
       outcome.interrupted = true
+    } catch {
+      outcome.failure = "\(error)"
     }
     if !outcome.interrupted, let failure = accumulator.failure {
-      throw DialectError.responsesFailed(failure)
+      outcome.failure = failure
     }
     outcome.text = accumulator.text
     outcome.toolCalls = accumulator.toolCalls
@@ -660,12 +711,15 @@ public actor Session {
   private func yieldDeltas(
     text: String?,
     reasoning: String?,
+    outcome: inout StepOutcome,
     continuation: AsyncThrowingStream<AgentEvent, Error>.Continuation)
   {
     if let text {
+      outcome.emittedOutput = true
       continuation.yield(.textDelta(text))
     }
     if let reasoning {
+      outcome.emittedOutput = true
       continuation.yield(.reasoningDelta(reasoning))
     }
   }

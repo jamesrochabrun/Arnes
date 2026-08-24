@@ -4,8 +4,9 @@ import OpenRouterSwift
 // MARK: - DialectError
 
 public enum DialectError: Error, Sendable {
-  /// The Responses endpoint reported a failed or errored response.
-  case responsesFailed(String)
+  /// A native endpoint misbehaved and the run could not (or was told not to) fall
+  /// back to chat: `(dialect, reason)`.
+  case nativeDialectFailed(String, String)
 }
 
 // MARK: - ResponsesTranslator

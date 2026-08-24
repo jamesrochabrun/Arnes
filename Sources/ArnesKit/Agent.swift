@@ -26,6 +26,9 @@ public enum AgentEvent: Sendable {
   /// The model/provider that actually served a step (differs from the requested
   /// slug when routing via `openrouter/auto` or fallbacks). Emitted on change.
   case routed(model: String, provider: String?)
+  /// A native dialect misbehaved before producing output; the step reran on chat
+  /// and the failure was recorded so future auto runs skip the broken endpoint.
+  case dialectFellBack(dialect: String, reason: String)
   /// The turn was cancelled (Ctrl-C / `Session.interrupt`).
   case interrupted
   /// Older history was auto-summarized because the context was nearly full.

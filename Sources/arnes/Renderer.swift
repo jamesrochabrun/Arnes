@@ -54,6 +54,10 @@ final class Renderer {
       endStreamedLineIfNeeded()
       print(ANSI.cyan("⇄ \(model)\(provider.map { " (\($0))" } ?? "")"))
 
+    case .dialectFellBack(let dialect, let reason):
+      endStreamedLineIfNeeded()
+      print(ANSI.yellow("⤵ \(dialect) dialect failed (\(String(reason.prefix(80)))) — fell back to chat, recorded"))
+
     case .verifier(let passed, let verdict):
       print(passed ? ANSI.green("✔ \(verdict)") : ANSI.red("✘ \(verdict)"))
 
