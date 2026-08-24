@@ -29,6 +29,8 @@ arnes do "add a --version flag to main.swift" \
   -m anthropic/claude-sonnet-5 \
   --fallback openai/gpt-5.6-luna \
   --verify openai/gpt-4o-mini
+# prints "⇄ routed to <model> (<provider>)" live when routing changes, and ends with
+# [requested openrouter/auto → served by deepseek/deepseek-v4-flash · 3 steps · $0.0003]
 
 # discover models
 arnes models "grok" --supports tools
@@ -48,6 +50,10 @@ arnes runs
 - **`arnes`** (CLI): `chat` · `do` · `models` · `status` · `runs`.
 - Built on [OpenRouterSwift](https://github.com/jamesrochabrun/OpenRouterSwift) — usage cost
   tracked per request, model fallbacks on every call.
+- **Routing visibility**: every response reports the model that actually served it
+  (`response.model` post-routing); run records keep the requested → served mapping.
+- **Stateless by design**: OpenRouter holds no conversation state; history lives in the
+  loop's memory during a run and in `~/.arnes/runs.jsonl` as records afterward.
 
 ## Status
 

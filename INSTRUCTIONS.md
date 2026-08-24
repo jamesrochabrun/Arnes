@@ -21,7 +21,8 @@ model drives the wire dialect, prompt pack, and request shape. Two products:
 3. **Tools stay few and schemas stay dumb.** Adding a tool needs a reason a non-frontier
    model can survive. No nested/clever schemas.
 4. **Every run appends a `RunRecord`.** Any new execution path (panel, dialect-native, subtask)
-   must write records — the eval loops depend on complete data.
+   must write records — the eval loops depend on complete data. Always capture the
+   **post-routing** model (`response.model` → `routedModels`), not just the requested slug.
 5. **ArnesKit stays UI-free and OpenRouterSwift stays upstream.** If ArnesKit needs a typed
    field the client lacks, file/fix it in OpenRouterSwift — don't parse `extraBody`/raw JSON
    here as a workaround.
@@ -60,6 +61,7 @@ Sources/arnes/main.swift  # chat · do · models · status · runs (ArgumentPars
 ## Status
 
 - [x] v0.1 skeleton — chat-dialect loop, 3 tools, packs, records, `--verify`, scoreboard
+- [x] Routing visibility — `AgentEvent.routed`, `RunRecord.routedModels`, requested→served footer
 - [ ] Dialect-native execution (`/messages`, `/responses`)
 - [ ] Conformance probe + cached model profiles
 - [ ] `--panel N` (worktree isolation, judge, labeled eval rows)
