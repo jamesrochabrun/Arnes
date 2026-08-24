@@ -1,4 +1,22 @@
 import Foundation
+#if canImport(Glibc)
+import Glibc
+#endif
+
+/// Appends one line to a JSONL file with `O_APPEND` semantics, so concurrent writers
+/// (parallel panel candidates) never clobber each other the way seek-then-write would.
+func appendJSONLLine(_ line: Data, to url: URL) throws {
+  try FileManager.default.createDirectory(
+    at: url.deletingLastPathComponent(),
+    withIntermediateDirectories: true)
+  let descriptor = open(url.path, O_WRONLY | O_APPEND | O_CREAT, 0o644)
+  guard descriptor >= 0 else {
+    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+  }
+  let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: false)
+  defer { close(descriptor) }
+  try handle.write(contentsOf: line)
+}
 
 /// One row of the evaluation substrate. Every agent execution appends a record;
 /// the panel judge (loop 2) and routing scoreboard (loop 3) read them back.
@@ -79,16 +97,7 @@ public struct RunRecordStore: Sendable {
     encoder.dateEncodingStrategy = .iso8601
     var line = try encoder.encode(record)
     line.append(Data("\n".utf8))
-    try FileManager.default.createDirectory(
-      at: url.deletingLastPathComponent(),
-      withIntermediateDirectories: true)
-    if let handle = try? FileHandle(forWritingTo: url) {
-      defer { try? handle.close() }
-      try handle.seekToEnd()
-      try handle.write(contentsOf: line)
-    } else {
-      try line.write(to: url)
-    }
+    try appendJSONLLine(line, to: url)
   }
 
   public func all() throws -> [RunRecord] {

@@ -85,6 +85,9 @@ final class MockOpenRouterService: OpenRouterService, @unchecked Sendable {
   private let lock = NSLock()
 
   var chunkScripts: [[ChatCompletionChunk]] = []
+  /// Per-model scripts, consulted before `chunkScripts` — required when concurrent
+  /// callers (panel candidates) would otherwise race on the shared queue.
+  var chunkScriptsByModel: [String: [[ChatCompletionChunk]]] = [:]
   var chatResponses: [ChatCompletionResponse] = []
   var manifestJSON = "[]"
   private var recordedRequests: [ChatCompletionRequest] = []
@@ -107,6 +110,11 @@ final class MockOpenRouterService: OpenRouterService, @unchecked Sendable {
   func chatCompletionStream(_ request: ChatCompletionRequest) async throws -> AsyncThrowingStream<ChatCompletionChunk, Error> {
     let script: [ChatCompletionChunk]? = lock.withLock {
       recordedRequests.append(request)
+      if let model = request.model, var scripts = chunkScriptsByModel[model], !scripts.isEmpty {
+        let first = scripts.removeFirst()
+        chunkScriptsByModel[model] = scripts
+        return first
+      }
       return chunkScripts.isEmpty ? nil : chunkScripts.removeFirst()
     }
     guard let script else { throw MockError.scriptExhausted }

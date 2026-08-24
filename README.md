@@ -82,6 +82,12 @@ arnes eval evals/basics -m anthropic/claude-haiku-4.5,openai/gpt-4o-mini -t 3
 # ✓ fix-bug · anthropic/claude-haiku-4.5 · 5 steps · $0.0112 · 14.1s
 # model                        pass        cost      steps  time   errors
 # anthropic/claude-haiku-4.5   24/24 (100%)  $0.15   3.4    8.5s   0
+
+# panel: fan one task to N models in isolated snapshots, judge picks, winner lands here
+arnes do "make the greeting configurable" --panel 3 \
+  -m anthropic/claude-sonnet-5,openai/gpt-5.6-luna,deepseek/deepseek-v4 \
+  --judge anthropic/claude-sonnet-5    # --no-apply keeps the winner in its snapshot
+# every candidate becomes a labeled eval row — real work grows the eval history for free
 ```
 
 Evals append to `~/.arnes/evals.jsonl` (and feed the `runs` scoreboard). A task is one

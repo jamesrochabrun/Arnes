@@ -37,6 +37,17 @@ extension AgentTool {
   }
 }
 
+// MARK: - Tool root
+
+/// Resolves a model-supplied path against a tool's root directory. Relative paths land
+/// inside the root; absolute paths pass through (the model is trusted within the run —
+/// the root exists for isolation between parallel candidates, not as a sandbox).
+func resolveToolPath(_ path: String, root: URL?) -> String {
+  guard let root, !path.hasPrefix("/") else { return path }
+  if path == "." || path.isEmpty { return root.path }
+  return root.appendingPathComponent(path).path
+}
+
 // MARK: - Built-in tools
 
 public struct ReadFileTool: AgentTool {
@@ -49,10 +60,12 @@ public struct ReadFileTool: AgentTool {
     "required": ["path"],
   ]
 
-  public init() { }
+  private let root: URL?
+
+  public init(root: URL? = nil) { self.root = root }
 
   public func execute(arguments: [String: JSONValue]) async throws -> String {
-    guard let path = arguments["path"]?.stringValue else {
+    guard let path = arguments["path"]?.stringValue.map({ resolveToolPath($0, root: root) }) else {
       return "error: missing 'path'"
     }
     guard let content = try? String(contentsOfFile: path, encoding: .utf8) else {
@@ -77,7 +90,9 @@ public struct WriteFileTool: AgentTool {
     "required": ["path", "content"],
   ]
 
-  public init() { }
+  private let root: URL?
+
+  public init(root: URL? = nil) { self.root = root }
 
   public func summary(arguments: [String: JSONValue]) -> String {
     let path = arguments["path"]?.stringValue ?? "?"
@@ -86,7 +101,10 @@ public struct WriteFileTool: AgentTool {
   }
 
   public func execute(arguments: [String: JSONValue]) async throws -> String {
-    guard let path = arguments["path"]?.stringValue, let content = arguments["content"]?.stringValue else {
+    guard
+      let path = arguments["path"]?.stringValue.map({ resolveToolPath($0, root: root) }),
+      let content = arguments["content"]?.stringValue
+    else {
       return "error: missing 'path' or 'content'"
     }
     try FileManager.default.createDirectory(
@@ -106,7 +124,9 @@ public struct BashTool: AgentTool {
     "required": ["command"],
   ]
 
-  public init() { }
+  private let root: URL?
+
+  public init(root: URL? = nil) { self.root = root }
 
   public func summary(arguments: [String: JSONValue]) -> String {
     // The command is shown verbatim — that's the whole point of the permission prompt.
@@ -120,6 +140,7 @@ public struct BashTool: AgentTool {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/bin/bash")
     process.arguments = ["-lc", command]
+    if let root { process.currentDirectoryURL = root }
     let pipe = Pipe()
     process.standardOutput = pipe
     process.standardError = pipe

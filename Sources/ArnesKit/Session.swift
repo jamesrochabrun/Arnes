@@ -153,6 +153,16 @@ public actor Session {
     ReadFileTool(), WriteFileTool(), EditFileTool(), BashTool(), GrepTool(), GlobTool(),
   ]
 
+  /// The default toolset bound to a working directory: relative paths resolve there and
+  /// bash runs with it as CWD. This is what lets panel candidates run in parallel without
+  /// touching the process CWD.
+  public static func tools(root: URL) -> [any AgentTool] {
+    [
+      ReadFileTool(root: root), WriteFileTool(root: root), EditFileTool(root: root),
+      BashTool(root: root), GrepTool(root: root), GlobTool(root: root),
+    ]
+  }
+
   // MARK: Public API
 
   public var messageCount: Int { history.count }

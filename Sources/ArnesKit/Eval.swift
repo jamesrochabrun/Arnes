@@ -106,16 +106,7 @@ public struct EvalStore: Sendable {
     encoder.dateEncodingStrategy = .iso8601
     var line = try encoder.encode(outcome)
     line.append(Data("\n".utf8))
-    try FileManager.default.createDirectory(
-      at: url.deletingLastPathComponent(),
-      withIntermediateDirectories: true)
-    if let handle = try? FileHandle(forWritingTo: url) {
-      defer { try? handle.close() }
-      try handle.seekToEnd()
-      try handle.write(contentsOf: line)
-    } else {
-      try line.write(to: url)
-    }
+    try appendJSONLLine(line, to: url)
   }
 
   public func all() throws -> [EvalOutcome] {

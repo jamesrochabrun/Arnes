@@ -22,7 +22,9 @@ public struct EditFileTool: AgentTool {
     "required": ["path", "old_string", "new_string"],
   ]
 
-  public init() { }
+  private let root: URL?
+
+  public init(root: URL? = nil) { self.root = root }
 
   public func summary(arguments: [String: JSONValue]) -> String {
     let path = arguments["path"]?.stringValue ?? "?"
@@ -33,7 +35,7 @@ public struct EditFileTool: AgentTool {
 
   public func execute(arguments: [String: JSONValue]) async throws -> String {
     guard
-      let path = arguments["path"]?.stringValue,
+      let path = arguments["path"]?.stringValue.map({ resolveToolPath($0, root: root) }),
       let oldString = arguments["old_string"]?.stringValue,
       let newString = arguments["new_string"]?.stringValue
     else {
@@ -88,13 +90,15 @@ public struct GrepTool: AgentTool {
   private static let maxOutputChars = 10_000
   private static let maxFileBytes = 2_000_000
 
-  public init() { }
+  private let toolRoot: URL?
+
+  public init(root: URL? = nil) { toolRoot = root }
 
   public func execute(arguments: [String: JSONValue]) async throws -> String {
     guard let pattern = arguments["pattern"]?.stringValue else {
       return "error: missing 'pattern'"
     }
-    let root = arguments["path"]?.stringValue ?? "."
+    let root = resolveToolPath(arguments["path"]?.stringValue ?? ".", root: toolRoot)
     let regex: NSRegularExpression
     do {
       regex = try NSRegularExpression(pattern: pattern)
@@ -187,13 +191,15 @@ public struct GlobTool: AgentTool {
 
   private static let maxResults = 500
 
-  public init() { }
+  private let toolRoot: URL?
+
+  public init(root: URL? = nil) { toolRoot = root }
 
   public func execute(arguments: [String: JSONValue]) async throws -> String {
     guard let pattern = arguments["pattern"]?.stringValue else {
       return "error: missing 'pattern'"
     }
-    let root = arguments["path"]?.stringValue ?? "."
+    let root = resolveToolPath(arguments["path"]?.stringValue ?? ".", root: toolRoot)
     let prefix = root.hasSuffix("/") ? root : root + "/"
     var results: [String] = []
     for file in GrepTool.files(under: root) {

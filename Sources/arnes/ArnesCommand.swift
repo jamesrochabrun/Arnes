@@ -75,7 +75,7 @@ struct Do: AsyncParsableCommand {
   @Argument(help: "The task.")
   var task: String
 
-  @Option(name: .shortAndLong, help: "Model slug (default: openrouter/auto).")
+  @Option(name: .shortAndLong, help: "Model slug (default: openrouter/auto). With --panel, a comma-separated list fans out to those models.")
   var model = "openrouter/auto"
 
   @Option(help: "Fallback models, comma-separated.")
@@ -87,8 +87,21 @@ struct Do: AsyncParsableCommand {
   @Flag(help: "Deny all mutating tools (read-only run).")
   var safe = false
 
+  @Option(help: "Fan the task to N isolated candidates (models from -m, cycled to N) and keep the judged winner.")
+  var panel: Int?
+
+  @Option(help: "Judge model for --panel (default: openrouter/auto).")
+  var judge = "openrouter/auto"
+
+  @Flag(help: "With --panel: keep the winner in its snapshot instead of applying its changes here.")
+  var noApply = false
+
   func run() async throws {
     let service = try makeService()
+    if panel != nil {
+      try await runPanel(service: service)
+      return
+    }
     let agent = Agent(
       service: service,
       permissions: safe ? DenyMutationsPermissions() : AutoApprovePermissions())
@@ -120,6 +133,54 @@ struct Do: AsyncParsableCommand {
     let record = result.record
     let routed = record.routedModels.joined(separator: ", ")
     print("\n[requested \(record.model) → served by \(routed.isEmpty ? "?" : routed) · \(record.steps) steps · \(record.toolCalls) tool calls · $\(String(format: "%.4f", record.costUSD))]")
+  }
+
+  private func runPanel(service: OpenRouterService) async throws {
+    guard let size = panel, size >= 2 else {
+      throw ValidationError("--panel needs at least 2 candidates — use plain `arnes do` for one.")
+    }
+    guard !safe else {
+      throw ValidationError("--panel and --safe don't combine: candidates must be able to write in their snapshots.")
+    }
+    let roster = model.split(separator: ",").map(String.init)
+    let candidateModels = (0..<size).map { roster[$0 % roster.count] }
+    print("panel of \(size): \(candidateModels.joined(separator: ", ")) — judge: \(judge)")
+
+    let runner = PanelRunner(service: service)
+    let result = try await runner.run(
+      task: task,
+      models: candidateModels,
+      judgeModel: judge,
+      baseDirectory: URL(fileURLWithPath: FileManager.default.currentDirectoryPath),
+      apply: !noApply,
+      onProgress: { progress in
+        switch progress {
+        case .candidateStarted(let index, let model):
+          print("· candidate \(index + 1) (\(model)) started")
+        case .candidateFinished(let candidate):
+          if let error = candidate.error {
+            print("✘ candidate \(candidate.index + 1) (\(candidate.model)) failed after \(Int(candidate.durationSeconds))s: \(error.prefix(120))")
+          } else {
+            let record = candidate.record
+            print("✔ candidate \(candidate.index + 1) (\(candidate.model)) finished — \(record?.steps ?? 0) steps · $\(String(format: "%.4f", record?.costUSD ?? 0)) · \(Int(candidate.durationSeconds))s")
+          }
+        case .judged(let verdict):
+          print("⚖ \(verdict.reason)")
+        }
+      })
+
+    let winner = result.winner
+    print("\nwinner: candidate \(winner.index + 1) (\(winner.model))")
+    if !winner.report.isEmpty {
+      print(winner.report)
+    }
+    if result.applied {
+      print("\napplied the winner's changes to \(FileManager.default.currentDirectoryPath)")
+    } else if let kept = result.winnerDirectory {
+      print("\nwinner's snapshot kept at \(kept.path) (--no-apply)")
+    }
+    let totalCost = result.candidates.reduce(result.verdict.judgeCostUSD) { $0 + ($1.record?.costUSD ?? 0) }
+    print("[panel cost $\(String(format: "%.4f", totalCost)) · outcomes labeled in ~/.arnes/evals.jsonl]")
   }
 }
 
