@@ -21,14 +21,45 @@ export OPENROUTER_API_KEY=sk-or-...
 ## Use
 
 ```bash
+# interactive session (the default): converse, steer, follow up
+arnes
+› refactor Sources/App/Router.swift to use async/await
+# streams the answer; asks y/n/always before bash / write_file / edit_file;
+# every turn ends with a status line:
+# ─ openrouter/auto → deepseek/deepseek-v4-flash · 3 steps · 2 tools · turn $0.0004 · session $0.0021
+```
+
+Inside the REPL:
+
+```text
+/model sonnet     switch the WHOLE conversation to another model, mid-session —
+                  history is client-side, so 20 turns into Claude you can finish on GPT
+/cost             running session total (live usage.cost)
+/verify           loop-1: a second model judges whether the last task was completed
+/save demo        name the session; resume later with `arnes --resume <id>`
+/clear /status /help /exit
+```
+
+Sessions persist to `~/.arnes/sessions/` as they happen (crash-safe):
+
+```bash
+arnes --continue        # resume the most recent session
+arnes --resume <id>     # resume a specific one
+arnes sessions          # list them
+```
+
+Headless stays first-class:
+
+```bash
 # one-shot chat, router picks the model, cost printed after
 arnes chat "explain actors in swift" -m openrouter/auto
 
-# agent loop with tools (read/write/bash), verified by a second model
+# agent loop with tools (read/write/edit/bash/grep/glob), verified by a second model
 arnes do "add a --version flag to main.swift" \
   -m anthropic/claude-sonnet-5 \
   --fallback openai/gpt-5.6-luna \
-  --verify openai/gpt-4o-mini
+  --verify openai/gpt-4o-mini \
+  # add --safe to deny all mutating tools
 # prints "⇄ routed to <model> (<provider>)" live when routing changes, and ends with
 # [requested openrouter/auto → served by deepseek/deepseek-v4-flash · 3 steps · $0.0003]
 
@@ -44,19 +75,22 @@ arnes runs
 
 ## What's inside
 
-- **`ArnesKit`** (embeddable, UI-free): the agent loop, capability manifest (`ModelCatalog`),
-  per-family prompt packs (user-overridable at `~/.arnes/packs/`), tools, and the
-  `RunRecord` eval substrate (`~/.arnes/runs.jsonl`).
-- **`arnes`** (CLI): `chat` · `do` · `models` · `status` · `runs`.
+- **`ArnesKit`** (embeddable, UI-free): the `Session` actor (streaming agent loop, permission
+  gating, interrupts), capability manifest (`ModelCatalog`), per-family prompt packs
+  (user-overridable at `~/.arnes/packs/`), six tools, session transcripts
+  (`~/.arnes/sessions/`), and the `RunRecord` eval substrate (`~/.arnes/runs.jsonl`).
+- **`arnes`** (CLI): `interactive` (default) · `chat` · `do` · `models` · `status` · `runs`
+  · `sessions`.
 - Built on [OpenRouterSwift](https://github.com/jamesrochabrun/OpenRouterSwift) — usage cost
   tracked per request, model fallbacks on every call.
 - **Routing visibility**: every response reports the model that actually served it
   (`response.model` post-routing); run records keep the requested → served mapping.
-- **Stateless by design**: OpenRouter holds no conversation state; history lives in the
-  loop's memory during a run and in `~/.arnes/runs.jsonl` as records afterward.
+- **Stateless by design**: OpenRouter holds no conversation state; history lives client-side
+  in the `Session` — which is exactly what makes mid-conversation `/model` swaps possible.
 
 ## Status
 
-v0.1 — working agent loop over the universal chat dialect, inline verification (loop 1), and
-run records. Next: dialect-native execution per family, parallel panels, scoreboard-driven
-routing. Roadmap in [DESIGN.md](DESIGN.md).
+v0.2 — interactive REPL (permission gating, streaming, Ctrl-C interrupt), mid-session
+`/model` swap, session persistence + resume, coding tools (`edit_file`/`grep`/`glob`), on top
+of the v0.1 loop (inline verification, run records). Next: context compaction, subagents,
+dialect-native execution, MCP. Roadmap in [DESIGN.md](DESIGN.md).

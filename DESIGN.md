@@ -26,8 +26,9 @@ prompt pack, request parameters, edit strategy.
    markdown (`PromptPack`). User-overridable at `~/.arnes/packs/<family>.md` so tuning needs
    no recompile. Packs are the *tunable* half of Arnes and evolve via the eval loops below.
 
-4. **Few tools, dumb schemas.** `read_file`, `write_file`, `bash` (+ `search`, `subtask`
-   later). Every extra tool or clever schema is where a non-frontier model face-plants.
+4. **Few tools, dumb schemas.** `read_file`, `write_file`, `edit_file`, `bash`, `grep`,
+   `glob` (+ `subtask` later). Every extra tool or clever schema is where a non-frontier
+   model face-plants.
 
 ## The three evaluation loops
 
@@ -53,12 +54,30 @@ populates it for free; loops 2–3 read it. `arnes runs` renders the scoreboard.
 - `openrouter/auto` as the default model; provider preferences and ZDR as user policy (later)
 - `session_id` sticky routing (later)
 
+## The interactive layer (v0.2, shipped)
+
+Arnes is a tool you live in, not just script. `arnes` with no arguments opens a REPL over a
+`Session` actor: client-side message history, streamed output, y/n/always permission gating
+before mutating tools, Ctrl-C interruption, and crash-safe persistence to
+`~/.arnes/sessions/<id>.jsonl` (`--resume <id>` / `--continue`).
+
+Because the history is fully client-side and OpenRouter is stateless, **`/model` swaps the
+entire conversation to any model mid-session** — 20 turns into Claude, type
+`/model openai/gpt-4o-mini` and the same conversation continues on GPT with full context.
+That one command is the identity of the tool: no single-vendor harness can offer it.
+`/cost` (live `usage.cost` totals), `/verify` (loop-1 on the last turn), `/save`, and a
+per-turn status line (requested → served model, steps, tools, turn + session cost) round out
+the router-native UX. Headless mode stays first-class: `arnes do` runs the same `Session`
+loop one-shot (auto-approve or `--safe`).
+
 ## Package layout
 
 ```
-ArnesKit  (library)   — Dialect, ModelProfile/ModelCatalog, PromptPack, AgentTool,
-                        Agent (loop + verifier), RunRecord/RunRecordStore
-arnes     (executable) — chat · do · models · status · runs
+ArnesKit  (library)   — Dialect, ModelProfile/ModelCatalog (+ fuzzy search), PromptPack,
+                        AgentTool + Permission, StreamAccumulator, Session (the loop),
+                        Agent (headless wrapper), CodingTools (edit_file/grep/glob),
+                        SessionStore/TranscriptEntry, RunRecord/RunRecordStore
+arnes     (executable) — interactive (default) · chat · do · models · status · runs · sessions
 ```
 
 Depends on [OpenRouterSwift](https://github.com/jamesrochabrun/OpenRouterSwift) (API client;
@@ -66,9 +85,20 @@ all three dialects already wrapped there). ArnesKit stays UI-free so native apps
 
 ## Roadmap
 
-- **v0.1 (now):** chat-dialect agent loop, 3 tools, prompt packs, run records, `--verify`,
+- **v0.1 (shipped):** chat-dialect agent loop, 3 tools, prompt packs, run records, `--verify`,
   scoreboard command.
-- **v0.2:** dialect-native execution for Anthropic (`/messages`) and OpenAI (`/responses`);
-  conformance probe; `--panel N` with worktree isolation; policy triggers.
-- **v0.3:** scoreboard-driven routing defaults; pack-improvement proposals with A/B evals;
-  provider/ZDR/budget policy files.
+- **v0.2 (shipped):** interactive core — `Session`, REPL, permission gating, streaming,
+  `/model` mid-session swap, session persistence/resume; coding tools (`edit_file`,
+  `grep`, `glob`).
+- **v0.3 (next):**
+  - *Context compaction:* track `usage.promptTokens` vs `profile.contextLength`; `/compact`
+    plus auto-trigger at ~80% (summarize older turns with a cheap model, keep the last N
+    verbatim, persist as a transcript entry). Evaluate OpenRouter's server-side
+    `context-compression` plugin as the alternative.
+  - *Subagents:* a `subtask` tool = nested `Session` with its own `RunRecord`
+    (`parentSessionId`), fresh history, inherited permission delegate + allowlist.
+  - *Dialect-native execution* for Anthropic (`/messages`) and OpenAI (`/responses`) under
+    `Session`; conformance probe; `--panel N` with worktree isolation; policy triggers.
+- **v0.4:** MCP tool provider (`MCPToolProvider` bridging MCP servers into `[any AgentTool]`,
+  config at `~/.arnes/mcp.json`, `.mutating` by default); scoreboard-driven routing defaults;
+  pack-improvement proposals with A/B evals; provider/ZDR/budget policy files.

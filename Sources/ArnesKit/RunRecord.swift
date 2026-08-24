@@ -20,6 +20,10 @@ public struct RunRecord: Codable, Sendable {
   /// Loop-1 verifier verdict, when a verifier ran.
   public var verifierPassed: Bool?
   public var summary: String?
+  /// The interactive session this turn belongs to (nil for pre-v0.2 records).
+  public var sessionId: String?
+  /// Zero-based turn number within the session.
+  public var turnIndex: Int?
 
   public init(
     task: String,
@@ -55,6 +59,8 @@ public struct RunRecord: Codable, Sendable {
     finished = try container.decode(Bool.self, forKey: .finished)
     verifierPassed = try container.decodeIfPresent(Bool.self, forKey: .verifierPassed)
     summary = try container.decodeIfPresent(String.self, forKey: .summary)
+    sessionId = try container.decodeIfPresent(String.self, forKey: .sessionId)
+    turnIndex = try container.decodeIfPresent(Int.self, forKey: .turnIndex)
   }
 }
 

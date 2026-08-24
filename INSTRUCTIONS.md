@@ -39,30 +39,50 @@ model drives the wire dialect, prompt pack, and request shape. Two products:
 
 ```
 Sources/ArnesKit/
-  Dialect.swift        # ModelFamily → preferred wire dialect
-  ModelProfile.swift   # capability manifest (ModelCatalog actor caches GET /models)
-  PromptPack.swift     # base prompt + per-family adapters + ~/.arnes/packs overrides
-  AgentTool.swift      # AgentTool protocol + read_file / write_file / bash
-  Agent.swift          # the loop: chat → tools → repeat; loop-1 verifier; cost tracking
-  RunRecord.swift      # eval substrate → ~/.arnes/runs.jsonl
-Sources/arnes/main.swift  # chat · do · models · status · runs (ArgumentParser)
+  Dialect.swift            # ModelFamily → preferred wire dialect
+  ModelProfile.swift       # capability manifest + fuzzy search (ModelCatalog actor, GET /models)
+  PromptPack.swift         # base prompt + per-family adapters + ~/.arnes/packs overrides
+  AgentTool.swift          # AgentTool protocol (+ permission/summary) + read_file / write_file / bash
+  CodingTools.swift        # edit_file / grep / glob — the coding toolset
+  Permission.swift         # ToolPermission, PermissionDecision, PermissionDelegate
+  StreamAccumulator.swift  # chunk stream → text + merged tool calls + usage
+  Session.swift            # the loop, interactive-first: history, /model swap, gating, interrupts
+  Agent.swift              # headless one-shot wrapper over Session (arnes do)
+  SessionStore.swift       # TranscriptEntry JSONL → ~/.arnes/sessions/<id>.jsonl
+  RunRecord.swift          # eval substrate → ~/.arnes/runs.jsonl (now with sessionId/turnIndex)
+Sources/arnes/             # the CLI
+  ArnesCommand.swift       # root: interactive (default) · chat · do · models · status · runs · sessions
+  Interactive.swift        # REPL: turns, slash commands, SIGINT→cancel, TerminalPermissions
+  LineReader.swift         # raw-mode line editor + history (readLine() fallback when piped)
+  Renderer.swift           # AgentEvent → terminal; cost/route status line per turn
+  SlashCommand.swift       # /model /cost /verify /save /clear /status /help /exit
+  ANSI.swift               # styling, TTY-gated
 ```
 
 ## Working on it
 
-- `swift test` — unit tests (no network; agent-loop tests should inject a mock
-  `OpenRouterService` — see OpenRouterSwift's `MockHTTPClient` pattern).
+- `swift test` — unit tests, no network. Agent/Session tests inject `MockOpenRouterService`
+  (`Tests/ArnesKitTests/Mocks/`) with scripted chunk streams; fixtures build chunks from JSON.
 - Live smoke: `OPENROUTER_API_KEY=... .build/debug/arnes chat "hi" -m anthropic/claude-haiku-4.5`,
   then `arnes do "create /tmp/x.txt containing hello" --verify openai/gpt-4o-mini`,
   then `arnes runs`.
-- Adding a dialect path: implement it behind `Dialect`, keep the `Agent.run` signature stable,
-  and record the dialect actually used in the `RunRecord`.
+- REPL smoke (works piped, no TTY needed):
+  `printf 'say hi\n/cost\n/save demo\n/exit\n' | arnes -m anthropic/claude-haiku-4.5`,
+  then `arnes --continue` to confirm resume, `/model <query>` to confirm mid-session swap.
+- Adding a dialect path: implement it behind `Dialect` inside `Session`, keep `send`/`Agent.run`
+  signatures stable, and record the dialect actually used in the `RunRecord`.
 
 ## Status
 
 - [x] v0.1 skeleton — chat-dialect loop, 3 tools, packs, records, `--verify`, scoreboard
 - [x] Routing visibility — `AgentEvent.routed`, `RunRecord.routedModels`, requested→served footer
+- [x] v0.2 interactive core — `Session` actor (streaming loop, client-side history), REPL with
+      permission gating (y/n/always), mid-conversation `/model` swap, `/cost` `/verify` `/save`,
+      crash-safe session persistence + `--resume`/`--continue`, Ctrl-C interrupt
+- [x] v0.2 coding tools — `edit_file` (unique-match replace), pure-Swift `grep`/`glob` (ungated)
+- [ ] Context compaction (`/compact` + auto at ~80% of `profile.contextLength`)
 - [ ] Dialect-native execution (`/messages`, `/responses`)
 - [ ] Conformance probe + cached model profiles
-- [ ] `--panel N` (worktree isolation, judge, labeled eval rows)
+- [ ] `--panel N` (worktree isolation, judge, labeled eval rows); `subtask` tool (nested Session)
+- [ ] MCP tool provider (`~/.arnes/mcp.json`)
 - [ ] Scoreboard-driven routing defaults; gated pack proposals

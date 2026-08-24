@@ -17,6 +17,9 @@ public struct PromptPack: Sendable {
 
     Rules:
     - Use tools to inspect before you modify. Never guess file contents.
+    - Use grep and glob to locate code, and read_file before editing it.
+    - Prefer edit_file for small, targeted changes; use write_file only to create \
+    new files or fully rewrite one.
     - Make the smallest change that completes the task.
     - When the task is done, reply with a short summary of what changed and why.
     - If the task is impossible or unsafe, say so instead of improvising.

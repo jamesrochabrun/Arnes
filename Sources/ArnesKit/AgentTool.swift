@@ -11,6 +11,11 @@ public protocol AgentTool: Sendable {
   var description: String { get }
   /// JSON Schema for the arguments object.
   var parameters: JSONValue { get }
+  /// Whether this tool mutates state. `.mutating` tools go through the session's
+  /// `PermissionDelegate` before executing; `.readOnly` tools run freely.
+  var permission: ToolPermission { get }
+  /// One-line description of a specific invocation, shown in permission prompts.
+  func summary(arguments: [String: JSONValue]) -> String
   func execute(arguments: [String: JSONValue]) async throws -> String
 }
 
@@ -19,6 +24,17 @@ extension AgentTool {
   public var toolDefinition: Tool {
     .function(name: name, description: description, parameters: parameters)
   }
+
+  /// Fail-safe default: a tool that doesn't declare itself is treated as mutating.
+  public var permission: ToolPermission { .mutating }
+
+  public func summary(arguments: [String: JSONValue]) -> String {
+    let rendered = arguments
+      .sorted { $0.key < $1.key }
+      .compactMap { key, value in value.stringValue.map { "\(key): \($0)" } }
+      .joined(separator: ", ")
+    return "\(name) \(String(rendered.prefix(120)))"
+  }
 }
 
 // MARK: - Built-in tools
@@ -26,6 +42,7 @@ extension AgentTool {
 public struct ReadFileTool: AgentTool {
   public let name = "read_file"
   public let description = "Read a file and return its contents with line numbers."
+  public let permission = ToolPermission.readOnly
   public let parameters: JSONValue = [
     "type": "object",
     "properties": ["path": ["type": "string", "description": "File path"]],
@@ -62,6 +79,12 @@ public struct WriteFileTool: AgentTool {
 
   public init() { }
 
+  public func summary(arguments: [String: JSONValue]) -> String {
+    let path = arguments["path"]?.stringValue ?? "?"
+    let bytes = arguments["content"]?.stringValue?.utf8.count ?? 0
+    return "write_file \(path) (\(bytes) bytes)"
+  }
+
   public func execute(arguments: [String: JSONValue]) async throws -> String {
     guard let path = arguments["path"]?.stringValue, let content = arguments["content"]?.stringValue else {
       return "error: missing 'path' or 'content'"
@@ -84,6 +107,11 @@ public struct BashTool: AgentTool {
   ]
 
   public init() { }
+
+  public func summary(arguments: [String: JSONValue]) -> String {
+    // The command is shown verbatim — that's the whole point of the permission prompt.
+    "bash: \(arguments["command"]?.stringValue ?? "?")"
+  }
 
   public func execute(arguments: [String: JSONValue]) async throws -> String {
     guard let command = arguments["command"]?.stringValue else {

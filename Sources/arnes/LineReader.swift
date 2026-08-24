@@ -1,0 +1,203 @@
+import Foundation
+
+/// Minimal raw-mode line editor: arrow-key history, left/right cursor movement,
+/// backspace, Ctrl-C (clear line; twice on empty = exit), Ctrl-D on empty = exit.
+/// Falls back to `Swift.readLine()` when stdin isn't a TTY so piped input works.
+/// Zero dependencies on purpose.
+final class LineReader {
+  private let historyURL: URL?
+  private var history: [String] = []
+  private let isTTY = isatty(0) != 0
+  private static let maxHistory = 500
+
+  init(historyURL: URL?) {
+    self.historyURL = historyURL
+    if let historyURL, let text = try? String(contentsOf: historyURL, encoding: .utf8) {
+      history = text.split(separator: "\n").map(String.init).suffix(Self.maxHistory)
+    }
+  }
+
+  /// Reads one line. Returns nil to exit (Ctrl-D on empty line, double Ctrl-C, or EOF).
+  func readLine(prompt: String) -> String? {
+    guard isTTY else {
+      print(prompt, terminator: "")
+      return Swift.readLine()
+    }
+    guard let line = readRaw(prompt: prompt) else { return nil }
+    if !line.isEmpty, line != history.last {
+      history.append(line)
+      if history.count > Self.maxHistory {
+        history.removeFirst(history.count - Self.maxHistory)
+      }
+      saveHistory()
+    }
+    return line
+  }
+
+  // MARK: Raw mode
+
+  private func readRaw(prompt: String) -> String? {
+    var original = termios()
+    tcgetattr(STDIN_FILENO, &original)
+    var raw = original
+    raw.c_lflag &= ~UInt(ICANON | ECHO | ISIG)
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw)
+    defer {
+      var restore = original
+      tcsetattr(STDIN_FILENO, TCSAFLUSH, &restore)
+    }
+
+    var buffer: [Character] = []
+    var cursor = 0
+    var historyIndex = history.count
+    var pendingLine: [Character] = []
+    var interruptArmed = false
+
+    func redraw() {
+      var out = "\r\u{1B}[K" + prompt + String(buffer)
+      let tail = buffer.count - cursor
+      if tail > 0 {
+        out += "\u{1B}[\(tail)D"
+      }
+      write(out)
+    }
+
+    write(prompt)
+
+    while true {
+      guard let byte = readByte() else {
+        write("\n")
+        return buffer.isEmpty ? nil : String(buffer)
+      }
+
+      switch byte {
+      case 0x0A, 0x0D: // enter
+        write("\n")
+        return String(buffer)
+
+      case 0x03: // Ctrl-C
+        if buffer.isEmpty {
+          if interruptArmed {
+            write("\n")
+            return nil
+          }
+          interruptArmed = true
+          write("\r\u{1B}[K" + ANSI.dim("(^C again to exit)") + "\n" + prompt)
+        } else {
+          buffer.removeAll()
+          cursor = 0
+          redraw()
+        }
+        continue
+
+      case 0x04: // Ctrl-D
+        if buffer.isEmpty {
+          write("\n")
+          return nil
+        }
+
+      case 0x7F, 0x08: // backspace
+        if cursor > 0 {
+          buffer.remove(at: cursor - 1)
+          cursor -= 1
+          redraw()
+        }
+
+      case 0x15: // Ctrl-U — clear line
+        buffer.removeAll()
+        cursor = 0
+        redraw()
+
+      case 0x01: // Ctrl-A — start of line
+        cursor = 0
+        redraw()
+
+      case 0x05: // Ctrl-E — end of line
+        cursor = buffer.count
+        redraw()
+
+      case 0x1B: // escape sequence
+        guard readByte() == UInt8(ascii: "["), let code = readByte() else { continue }
+        switch code {
+        case UInt8(ascii: "A"): // up — history back
+          if historyIndex > 0 {
+            if historyIndex == history.count { pendingLine = buffer }
+            historyIndex -= 1
+            buffer = Array(history[historyIndex])
+            cursor = buffer.count
+            redraw()
+          }
+        case UInt8(ascii: "B"): // down — history forward
+          if historyIndex < history.count {
+            historyIndex += 1
+            buffer = historyIndex == history.count ? pendingLine : Array(history[historyIndex])
+            cursor = buffer.count
+            redraw()
+          }
+        case UInt8(ascii: "C"): // right
+          if cursor < buffer.count {
+            cursor += 1
+            redraw()
+          }
+        case UInt8(ascii: "D"): // left
+          if cursor > 0 {
+            cursor -= 1
+            redraw()
+          }
+        case UInt8(ascii: "3"): // delete key: ESC [ 3 ~
+          _ = readByte()
+          if cursor < buffer.count {
+            buffer.remove(at: cursor)
+            redraw()
+          }
+        default:
+          continue
+        }
+
+      default:
+        guard let character = readCharacter(firstByte: byte) else { continue }
+        buffer.insert(character, at: cursor)
+        cursor += 1
+        redraw()
+      }
+      interruptArmed = false
+    }
+  }
+
+  /// Decodes one UTF-8 character starting from an already-read first byte.
+  private func readCharacter(firstByte: UInt8) -> Character? {
+    var bytes = [firstByte]
+    let continuationCount: Int
+    switch firstByte {
+    case 0x00..<0x20: return nil // other control chars
+    case 0x20..<0x80: continuationCount = 0
+    case 0xC0..<0xE0: continuationCount = 1
+    case 0xE0..<0xF0: continuationCount = 2
+    case 0xF0..<0xF8: continuationCount = 3
+    default: return nil
+    }
+    for _ in 0..<continuationCount {
+      guard let next = readByte() else { return nil }
+      bytes.append(next)
+    }
+    return String(bytes: bytes, encoding: .utf8)?.first
+  }
+
+  private func readByte() -> UInt8? {
+    var byte: UInt8 = 0
+    let count = read(STDIN_FILENO, &byte, 1)
+    return count == 1 ? byte : nil
+  }
+
+  private func write(_ text: String) {
+    FileHandle.standardOutput.write(Data(text.utf8))
+  }
+
+  private func saveHistory() {
+    guard let historyURL else { return }
+    try? FileManager.default.createDirectory(
+      at: historyURL.deletingLastPathComponent(),
+      withIntermediateDirectories: true)
+    try? history.joined(separator: "\n").write(to: historyURL, atomically: true, encoding: .utf8)
+  }
+}

@@ -23,8 +23,8 @@ struct Arnes: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "arnes",
     abstract: "Arnes — a model-adaptive agent harness for OpenRouter.",
-    subcommands: [Chat.self, Do.self, Models.self, Status.self, Runs.self],
-    defaultSubcommand: Chat.self)
+    subcommands: [Interactive.self, Chat.self, Do.self, Models.self, Status.self, Runs.self, Sessions.self],
+    defaultSubcommand: Interactive.self)
 }
 
 // MARK: - chat
@@ -84,9 +84,14 @@ struct Do: AsyncParsableCommand {
   @Option(help: "Verify the outcome with this (cheaper) model after the run.")
   var verify: String?
 
+  @Flag(help: "Deny all mutating tools (read-only run).")
+  var safe = false
+
   func run() async throws {
     let service = try makeService()
-    let agent = Agent(service: service)
+    let agent = Agent(
+      service: service,
+      permissions: safe ? DenyMutationsPermissions() : AutoApprovePermissions())
     let result = try await agent.run(
       task: task,
       model: model,
@@ -100,10 +105,14 @@ struct Do: AsyncParsableCommand {
           print("→ \(name) \(arguments.prefix(120))")
         case .toolResult(let name, let preview):
           print("← \(name): \(preview)")
+        case .toolDenied(let name, _):
+          print("⊘ \(name) denied")
         case .verifier(let passed, let verdict):
           print(passed ? "✔ \(verdict)" : "✘ \(verdict)")
         case .routed(let model, let provider):
           print("⇄ routed to \(model)\(provider.map { " (\($0))" } ?? "")")
+        case .textDelta, .reasoningDelta, .interrupted, .turnFinished:
+          break // headless output prints whole messages and its own footer
         }
       })
     let record = result.record
@@ -158,6 +167,28 @@ struct Status: AsyncParsableCommand {
       print("limit: \(limit)  remaining: \(key.limitRemaining ?? 0)")
     }
     print("credits: \(String(format: "%.4f", credits.remaining)) remaining of \(credits.totalCredits)")
+  }
+}
+
+// MARK: - sessions
+
+struct Sessions: AsyncParsableCommand {
+  static let configuration = CommandConfiguration(
+    abstract: "List saved interactive sessions (resume with `arnes --resume <id>`).")
+
+  func run() throws {
+    let sessions = try SessionStore().list()
+    guard !sessions.isEmpty else {
+      print("no sessions yet — start one with `arnes`")
+      return
+    }
+    let formatter = DateFormatter()
+    formatter.dateFormat = "yyyy-MM-dd HH:mm"
+    for meta in sessions {
+      let name = meta.name ?? "(unnamed)"
+      let model = meta.model ?? "?"
+      print("\(meta.id)  \(formatter.string(from: meta.updatedAt))  \(name.padding(toLength: 24, withPad: " ", startingAt: 0)) \(model)  \(meta.messageCount) msgs")
+    }
   }
 }
 
