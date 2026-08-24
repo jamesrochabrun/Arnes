@@ -189,6 +189,20 @@ struct Interactive: AsyncParsableCommand {
         print(ANSI.red("verify failed: \(error)"))
       }
 
+    case .compact(let summarizer):
+      do {
+        let result = try await session.compact(with: summarizer)
+        if result.summarizedMessages == 0 {
+          print(ANSI.dim("nothing to compact yet — only the current turn is in context"))
+        } else {
+          print(ANSI.dim(
+            "◈ compacted \(result.summarizedMessages) messages into a summary · "
+              + "\(result.keptMessages) kept · cost \(Renderer.usd(result.costUSD))"))
+        }
+      } catch {
+        print(ANSI.red("compact failed: \(error)"))
+      }
+
     case .save(let name):
       let formatter = DateFormatter()
       formatter.dateFormat = "yyyyMMdd-HHmm"

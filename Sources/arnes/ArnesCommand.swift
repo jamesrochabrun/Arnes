@@ -111,6 +111,8 @@ struct Do: AsyncParsableCommand {
           print(passed ? "✔ \(verdict)" : "✘ \(verdict)")
         case .routed(let model, let provider):
           print("⇄ routed to \(model)\(provider.map { " (\($0))" } ?? "")")
+        case .compacted(let summarized, _):
+          print("◈ compacted \(summarized) older messages")
         case .textDelta, .reasoningDelta, .interrupted, .turnFinished:
           break // headless output prints whole messages and its own footer
         }

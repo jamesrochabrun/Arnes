@@ -61,15 +61,22 @@ final class Renderer {
       endStreamedLineIfNeeded()
       print(ANSI.yellow("⏹ interrupted"))
 
+    case .compacted(let summarized, let kept):
+      endStreamedLineIfNeeded()
+      print(ANSI.dim("◈ context compacted: \(summarized) older messages summarized · \(kept) kept verbatim"))
+
     case .turnFinished(let stats):
       endStreamedLineIfNeeded()
       let served = stats.routedModels.joined(separator: ", ")
       let route = served.isEmpty || served == stats.requestedModel
         ? stats.requestedModel
         : "\(stats.requestedModel) → \(served)"
-      print(ANSI.dim(
-        "─ \(route) · \(stats.steps) steps · \(stats.toolCalls) tools · "
-          + "turn \(Self.usd(stats.turnCostUSD)) · session \(Self.usd(stats.sessionCostUSD))"))
+      var footer = "─ \(route) · \(stats.steps) steps · \(stats.toolCalls) tools · "
+        + "turn \(Self.usd(stats.turnCostUSD)) · session \(Self.usd(stats.sessionCostUSD))"
+      if let used = stats.promptTokens, let context = stats.contextLength, context > 0 {
+        footer += " · ctx \(used * 100 / context)%"
+      }
+      print(ANSI.dim(footer))
     }
   }
 

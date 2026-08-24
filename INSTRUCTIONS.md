@@ -80,7 +80,9 @@ Sources/arnes/             # the CLI
       permission gating (y/n/always), mid-conversation `/model` swap, `/cost` `/verify` `/save`,
       crash-safe session persistence + `--resume`/`--continue`, Ctrl-C interrupt
 - [x] v0.2 coding tools — `edit_file` (unique-match replace), pure-Swift `grep`/`glob` (ungated)
-- [ ] Context compaction (`/compact` + auto at ~80% of `profile.contextLength`)
+- [x] Context compaction — `/compact` + auto at ~80% of `profile.contextLength`; summary rides
+      the system prompt, last user turn kept verbatim, persisted as a `compaction` entry;
+      status line shows live `ctx N%`
 - [ ] Dialect-native execution (`/messages`, `/responses`)
 - [ ] Conformance probe + cached model profiles
 - [ ] `--panel N` (worktree isolation, judge, labeled eval rows); `subtask` tool (nested Session)

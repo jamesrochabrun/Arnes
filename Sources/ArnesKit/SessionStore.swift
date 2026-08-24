@@ -17,6 +17,9 @@ public struct TranscriptEntry: Codable, Sendable {
     case modelChange = "model_change"
     case cost
     case clear
+    /// Older history was summarized; `text` holds the summary. The kept messages are
+    /// re-appended after this entry, so replay is: reset, carry the summary forward.
+    case compaction
   }
 
   public var type: Kind
@@ -76,6 +79,12 @@ public struct TranscriptEntry: Codable, Sendable {
 
   public static func clear() -> TranscriptEntry {
     TranscriptEntry(type: .clear)
+  }
+
+  public static func compaction(summary: String) -> TranscriptEntry {
+    var entry = TranscriptEntry(type: .compaction)
+    entry.text = summary
+    return entry
   }
 
   public init(type: Kind) {
@@ -139,6 +148,8 @@ public struct LoadedSession: Sendable {
   public let model: String
   public let costUSD: Double
   public let turnCount: Int
+  /// The latest compaction summary, when older history was compacted away.
+  public let compactionSummary: String?
 }
 
 // MARK: - SessionStore
@@ -182,6 +193,7 @@ public struct SessionStore: Sendable {
     var name: String?
     var costUSD = 0.0
     var turnCount = 0
+    var compactionSummary: String?
     for entry in entries {
       switch entry.type {
       case .meta:
@@ -199,6 +211,10 @@ public struct SessionStore: Sendable {
         if let session = entry.sessionUSD { costUSD = session }
       case .clear:
         messages.removeAll()
+        compactionSummary = nil
+      case .compaction:
+        messages.removeAll()
+        compactionSummary = entry.text
       }
     }
 
@@ -216,7 +232,8 @@ public struct SessionStore: Sendable {
       messages: messages,
       model: model ?? "openrouter/auto",
       costUSD: costUSD,
-      turnCount: turnCount)
+      turnCount: turnCount,
+      compactionSummary: compactionSummary)
   }
 
   /// All stored sessions, most recently updated first.

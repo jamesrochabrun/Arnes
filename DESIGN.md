@@ -90,11 +90,13 @@ all three dialects already wrapped there). ArnesKit stays UI-free so native apps
 - **v0.2 (shipped):** interactive core — `Session`, REPL, permission gating, streaming,
   `/model` mid-session swap, session persistence/resume; coding tools (`edit_file`,
   `grep`, `glob`).
-- **v0.3 (next):**
-  - *Context compaction:* track `usage.promptTokens` vs `profile.contextLength`; `/compact`
-    plus auto-trigger at ~80% (summarize older turns with a cheap model, keep the last N
-    verbatim, persist as a transcript entry). Evaluate OpenRouter's server-side
-    `context-compression` plugin as the alternative.
+- **v0.3 (in progress):**
+  - *Context compaction (shipped):* `usage.promptTokens` vs `profile.contextLength` drives an
+    auto-trigger at ~80% (plus manual `/compact [model]`): everything before the last user
+    turn is summarized (router picks the summarizer by default), the summary rides the
+    system prompt, and a `compaction` transcript entry makes it survive resume. The status
+    line shows live context usage (`ctx N%`). OpenRouter's server-side `context-compression`
+    plugin remains the alternative to evaluate.
   - *Subagents:* a `subtask` tool = nested `Session` with its own `RunRecord`
     (`parentSessionId`), fresh history, inherited permission delegate + allowlist.
   - *Dialect-native execution* for Anthropic (`/messages`) and OpenAI (`/responses`) under

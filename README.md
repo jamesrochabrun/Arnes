@@ -36,6 +36,8 @@ Inside the REPL:
                   history is client-side, so 20 turns into Claude you can finish on GPT
 /cost             running session total (live usage.cost)
 /verify           loop-1: a second model judges whether the last task was completed
+/compact          summarize older turns to free context (also automatic at ~80% full;
+                  the status line shows live usage: · ctx 34%)
 /save demo        name the session; resume later with `arnes --resume <id>`
 /clear /status /help /exit
 ```
@@ -90,7 +92,8 @@ arnes runs
 
 ## Status
 
-v0.2 — interactive REPL (permission gating, streaming, Ctrl-C interrupt), mid-session
-`/model` swap, session persistence + resume, coding tools (`edit_file`/`grep`/`glob`), on top
-of the v0.1 loop (inline verification, run records). Next: context compaction, subagents,
-dialect-native execution, MCP. Roadmap in [DESIGN.md](DESIGN.md).
+v0.2+ — interactive REPL (permission gating, streaming, Ctrl-C interrupt), mid-session
+`/model` swap, session persistence + resume, coding tools (`edit_file`/`grep`/`glob`), and
+context compaction (`/compact` + auto at ~80% full, live `ctx N%` in the status line), on top
+of the v0.1 loop (inline verification, run records). Next: subagents, dialect-native
+execution, MCP. Roadmap in [DESIGN.md](DESIGN.md).

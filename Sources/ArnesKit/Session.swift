@@ -8,6 +8,8 @@ public enum SessionError: Error, Sendable {
   case turnInFlight
   /// `verifyLastTurn` was called before any completed turn.
   case nothingToVerify
+  /// The summarizer model returned no usable summary.
+  case compactionFailed
 }
 
 // MARK: - Session
@@ -51,6 +53,17 @@ public actor Session {
     public let sessionCostUSD: Double
     public let requestedModel: String
     public let routedModels: [String]
+    /// Prompt tokens of the turn's last request — the live context footprint.
+    public let promptTokens: Int?
+    /// The model's context window, when the manifest knows it.
+    public let contextLength: Int?
+  }
+
+  /// What a compaction did.
+  public struct CompactionResult: Sendable {
+    public let summarizedMessages: Int
+    public let keptMessages: Int
+    public let costUSD: Double
   }
 
   // MARK: State
@@ -76,6 +89,12 @@ public actor Session {
   private var metaWritten: Bool
   private var lastUserText: String?
   private var lastAssistantText: String?
+  /// Summary of history that was compacted away; injected into the system prompt.
+  private var compactionSummary: String?
+  /// Prompt tokens reported by the most recent request — drives auto-compaction.
+  public private(set) var lastPromptTokens: Int?
+  /// Auto-compact when the context is this full (fraction of `contextLength`).
+  private let compactionThreshold = 0.8
 
   // MARK: Init
 
@@ -127,6 +146,7 @@ public actor Session {
     maxStepsPerTurn = configuration.maxStepsPerTurn
     turnIndex = loaded.turnCount
     metaWritten = true
+    compactionSummary = loaded.compactionSummary
   }
 
   public static let defaultTools: [any AgentTool] = [
@@ -202,7 +222,75 @@ public actor Session {
     history.removeAll()
     lastUserText = nil
     lastAssistantText = nil
+    compactionSummary = nil
+    lastPromptTokens = nil
     persist(.clear())
+  }
+
+  /// Compacts the conversation: everything before the last user message is summarized
+  /// by `summarizerModel` (default `openrouter/auto`) into a note that rides in the
+  /// system prompt; the last turn stays verbatim. Also triggered automatically when a
+  /// turn starts with the context ~80% full (`profile.contextLength` from the manifest).
+  @discardableResult
+  public func compact(with summarizerModel: String? = nil) async throws -> CompactionResult {
+    guard turnTask == nil else { throw SessionError.turnInFlight }
+    return try await performCompaction(with: summarizerModel)
+  }
+
+  private func performCompaction(with summarizerModel: String?) async throws -> CompactionResult {
+    // Cut at the last user message so the current turn (including any tool exchanges
+    // after it) survives verbatim and no tool call is separated from its result.
+    guard let keepFrom = history.lastIndex(where: { $0.role == .user }), keepFrom > 0 else {
+      return CompactionResult(summarizedMessages: 0, keptMessages: history.count, costUSD: 0)
+    }
+    let dropped = Array(history[..<keepFrom])
+    let kept = Array(history[keepFrom...])
+    let response = try await service.chatCompletion(
+      ChatCompletionRequest(
+        model: summarizerModel ?? "openrouter/auto",
+        messages: [
+          .system(Self.compactionPrompt),
+          .user(Self.renderTranscript(dropped, existingSummary: compactionSummary)),
+        ]))
+    guard let summary = response.choices.first?.message.content, !summary.isEmpty else {
+      throw SessionError.compactionFailed
+    }
+    let cost = response.usage?.cost ?? 0
+    costUSD += cost
+    compactionSummary = summary
+    history = kept
+    lastPromptTokens = nil // stale until the next request reports usage
+    persist(.compaction(summary: summary))
+    for message in kept {
+      persist(TranscriptEntry(message: message))
+    }
+    persist(.cost(turnUSD: cost, sessionUSD: costUSD))
+    return CompactionResult(summarizedMessages: dropped.count, keptMessages: kept.count, costUSD: cost)
+  }
+
+  private static let compactionPrompt = """
+    You compress an agent conversation into notes the assistant will rely on to continue \
+    seamlessly. Preserve: the user's goals and constraints, decisions made, file paths and \
+    code entities touched, the current state of the task, and unresolved items. Be specific \
+    and terse. Reply with only the notes.
+    """
+
+  private static func renderTranscript(_ messages: [Message], existingSummary: String?) -> String {
+    var lines: [String] = []
+    if let existingSummary {
+      lines.append("[earlier summary]\n\(existingSummary)")
+    }
+    for message in messages {
+      var text = message.content?.plainText ?? ""
+      if let calls = message.toolCalls, !calls.isEmpty {
+        let rendered = calls
+          .map { "\($0.function?.name ?? "?")(\(String(($0.function?.arguments ?? "").prefix(200))))" }
+          .joined(separator: ", ")
+        text += (text.isEmpty ? "" : "\n") + "[tool calls: \(rendered)]"
+      }
+      lines.append("\(message.role.rawValue): \(String(text.prefix(2000)))")
+    }
+    return lines.joined(separator: "\n\n")
   }
 
   /// Names this session in the store (`/save`).
@@ -232,6 +320,20 @@ public actor Session {
       return
     }
     let pack = PromptPack.load(for: profile.family)
+
+    // Auto-compact before this turn when the previous request reported a nearly full
+    // context. The whole previous turn stays verbatim; older history becomes a note.
+    if let contextLength = profile.contextLength,
+       let used = lastPromptTokens,
+       Double(used) >= Double(contextLength) * compactionThreshold,
+       let result = try? await performCompaction(with: nil),
+       result.summarizedMessages > 0
+    {
+      continuation.yield(.compacted(
+        summarizedMessages: result.summarizedMessages,
+        keptMessages: result.keptMessages))
+    }
+
     var record = RunRecord(
       task: text,
       model: model,
@@ -263,7 +365,7 @@ public actor Session {
           ChatCompletionRequest(
             model: model,
             models: fallbackModels.isEmpty ? nil : fallbackModels,
-            messages: [.system(pack.text)] + history,
+            messages: [.system(systemText(pack: pack))] + history,
             tools: profile.supportsTools ? tools.map(\.toolDefinition) : nil))
         for try await chunk in stream {
           let deltas = accumulator.ingest(chunk)
@@ -293,6 +395,9 @@ public actor Session {
         record.costUSD += cost
         turnCost += cost
         costUSD += cost
+      }
+      if let promptTokens = accumulator.usage?.promptTokens {
+        lastPromptTokens = promptTokens
       }
       if Task.isCancelled {
         // Nothing from this step is in the history yet — safe to stop here.
@@ -387,8 +492,18 @@ public actor Session {
       turnCostUSD: turnCost,
       sessionCostUSD: costUSD,
       requestedModel: record.model,
-      routedModels: record.routedModels)))
+      routedModels: record.routedModels,
+      promptTokens: lastPromptTokens,
+      contextLength: profile.contextLength)))
     continuation.finish()
+  }
+
+  /// The prompt pack for the current model, plus the compaction summary when one exists.
+  private func systemText(pack: PromptPack) -> String {
+    guard let compactionSummary else { return pack.text }
+    return pack.text
+      + "\n\n# Conversation summary\nEarlier context was compacted. Rely on these notes:\n"
+      + compactionSummary
   }
 
   // MARK: Helpers

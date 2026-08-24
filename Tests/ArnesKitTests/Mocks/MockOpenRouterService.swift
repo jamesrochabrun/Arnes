@@ -161,10 +161,16 @@ enum Fixtures {
       """)
   }
 
-  static func usageChunk(cost: Double, model: String = "test/model", provider: String? = nil) -> ChatCompletionChunk {
+  static func usageChunk(
+    cost: Double,
+    model: String = "test/model",
+    provider: String? = nil,
+    promptTokens: Int = 10)
+    -> ChatCompletionChunk
+  {
     let providerField = provider.map { ",\"provider\":\"\($0)\"" } ?? ""
     return chunk("""
-      {"model":"\(model)"\(providerField),"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"cost":\(cost)}}
+      {"model":"\(model)"\(providerField),"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":\(promptTokens),"completion_tokens":5,"cost":\(cost)}}
       """)
   }
 

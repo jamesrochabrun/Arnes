@@ -5,6 +5,7 @@ enum SlashCommand {
   case model(query: String?)
   case cost
   case verify(model: String?)
+  case compact(model: String?)
   case save(name: String?)
   case clear
   case status
@@ -26,6 +27,7 @@ enum SlashCommand {
     case "model": return .model(query: argument)
     case "cost": return .cost
     case "verify": return .verify(model: argument)
+    case "compact": return .compact(model: argument)
     case "save": return .save(name: argument)
     case "clear": return .clear
     case "status": return .status
@@ -39,6 +41,7 @@ enum SlashCommand {
     /model [query]   show the current model, or switch — fuzzy search, e.g. /model sonnet
     /cost            running session cost
     /verify [model]  verify the last turn with a second model (default: openrouter/auto)
+    /compact [model] summarize older turns to free context (also automatic at ~80% full)
     /save [name]     name this session for later --resume
     /clear           clear the conversation history
     /status          session id, model, messages, cost

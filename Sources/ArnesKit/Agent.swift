@@ -28,6 +28,8 @@ public enum AgentEvent: Sendable {
   case routed(model: String, provider: String?)
   /// The turn was cancelled (Ctrl-C / `Session.interrupt`).
   case interrupted
+  /// Older history was auto-summarized because the context was nearly full.
+  case compacted(summarizedMessages: Int, keptMessages: Int)
   /// The turn completed; footer numbers for rendering.
   case turnFinished(Session.TurnStats)
 }
