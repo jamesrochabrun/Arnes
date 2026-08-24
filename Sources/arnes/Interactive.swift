@@ -24,8 +24,10 @@ struct TerminalPermissions: PermissionDelegate {
     print(answer ?? "")
     switch answer?.lowercased() {
     case "y":
+      spinner?.start("running \(toolName)")
       return .allow
     case "a":
+      spinner?.start("running \(toolName)")
       return .allowAlwaysThisSession
     default:
       return .deny(reason: "user declined")
