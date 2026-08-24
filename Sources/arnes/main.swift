@@ -102,10 +102,13 @@ struct Do: AsyncParsableCommand {
           print("← \(name): \(preview)")
         case .verifier(let passed, let verdict):
           print(passed ? "✔ \(verdict)" : "✘ \(verdict)")
+        case .routed(let model, let provider):
+          print("⇄ routed to \(model)\(provider.map { " (\($0))" } ?? "")")
         }
       })
     let record = result.record
-    print("\n[\(record.model) · \(record.steps) steps · \(record.toolCalls) tool calls · $\(String(format: "%.4f", record.costUSD))]")
+    let routed = record.routedModels.joined(separator: ", ")
+    print("\n[requested \(record.model) → served by \(routed.isEmpty ? "?" : routed) · \(record.steps) steps · \(record.toolCalls) tool calls · $\(String(format: "%.4f", record.costUSD))]")
   }
 }
 

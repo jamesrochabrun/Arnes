@@ -16,6 +16,9 @@ public enum AgentEvent: Sendable {
   case toolCall(name: String, arguments: String)
   case toolResult(name: String, preview: String)
   case verifier(passed: Bool, verdict: String)
+  /// The model/provider that actually served a step (differs from the requested
+  /// slug when routing via `openrouter/auto` or fallbacks). Emitted on change.
+  case routed(model: String, provider: String?)
 }
 
 // MARK: - Agent
@@ -69,6 +72,7 @@ public final class Agent: @unchecked Sendable {
       .user(task),
     ]
     var finalText = ""
+    var lastRouted: String?
 
     for _ in 0..<maxSteps {
       record.steps += 1
@@ -79,6 +83,13 @@ public final class Agent: @unchecked Sendable {
           messages: messages,
           tools: profile.supportsTools ? tools.map(\.toolDefinition) : nil))
       record.costUSD += response.usage?.cost ?? 0
+      if response.model != lastRouted {
+        lastRouted = response.model
+        if !record.routedModels.contains(response.model) {
+          record.routedModels.append(response.model)
+        }
+        onEvent(.routed(model: response.model, provider: response.provider))
+      }
 
       guard let message = response.choices.first?.message else { break }
       if let content = message.content, !content.isEmpty {

@@ -11,6 +11,9 @@ public struct RunRecord: Codable, Sendable {
   public var packFamily: String
   public var steps: Int
   public var toolCalls: Int
+  /// The models that actually served steps (post-routing) — differs from `model`
+  /// when using `openrouter/auto` or fallbacks.
+  public var routedModels: [String]
   /// Total USD cost, summed from `usage.cost` across every request in the run.
   public var costUSD: Double
   public var finished: Bool
@@ -32,8 +35,26 @@ public struct RunRecord: Codable, Sendable {
     self.packFamily = packFamily
     steps = 0
     toolCalls = 0
+    routedModels = []
     costUSD = 0
     finished = false
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decode(String.self, forKey: .id)
+    startedAt = try container.decode(Date.self, forKey: .startedAt)
+    task = try container.decode(String.self, forKey: .task)
+    model = try container.decode(String.self, forKey: .model)
+    dialect = try container.decode(String.self, forKey: .dialect)
+    packFamily = try container.decode(String.self, forKey: .packFamily)
+    steps = try container.decode(Int.self, forKey: .steps)
+    toolCalls = try container.decode(Int.self, forKey: .toolCalls)
+    routedModels = try container.decodeIfPresent([String].self, forKey: .routedModels) ?? []
+    costUSD = try container.decode(Double.self, forKey: .costUSD)
+    finished = try container.decode(Bool.self, forKey: .finished)
+    verifierPassed = try container.decodeIfPresent(Bool.self, forKey: .verifierPassed)
+    summary = try container.decodeIfPresent(String.self, forKey: .summary)
   }
 }
 
