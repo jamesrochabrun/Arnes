@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "v*"]
+  pull_request:
+
+jobs:
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test
+        run: swift test
+
+  linux:
+    runs-on: ubuntu-latest
+    container: swift:6.0-jammy
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test
+        run: swift test
+
+  # The release pipeline ships this exact artifact — build it on every push so a
+  # broken static build surfaces here, not at tag time.
+  linux-static:
+    runs-on: ubuntu-latest
+    container: swift:6.0-jammy
+    steps:
+      - uses: actions/checkout@v4
+      - name: Static-stdlib release build
+        run: swift build -c release --static-swift-stdlib

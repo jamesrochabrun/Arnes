@@ -1,0 +1,60 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    container: swift:6.0-jammy
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build (static stdlib)
+        run: |
+          swift build -c release --static-swift-stdlib
+          strip .build/release/arnes || true
+          cp .build/release/arnes arnes-linux-${{ matrix.arch }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arnes-linux-${{ matrix.arch }}
+          path: arnes-linux-${{ matrix.arch }}
+
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          swift build -c release
+          cp .build/release/arnes arnes-macos-arm64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arnes-macos-arm64
+          path: arnes-macos-arm64
+
+  release:
+    needs: [linux, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "$GITHUB_REF_NAME" --generate-notes

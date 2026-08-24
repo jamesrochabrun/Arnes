@@ -20,10 +20,11 @@ harbor run -d terminal-bench@2.0 \
 
 Notes:
 
-- **Prebuilt binary strongly recommended.** Building Swift from source in every container
-  is slow. Publish a static Linux binary of `arnes` (e.g. as a GitHub release asset built
-  with `swift build -c release --static-swift-stdlib` on Linux) and set
-  `ARNES_LINUX_BINARY_URL` to skip the source build.
+- **Prebuilt binary is the default.** Every tagged release ships static-stdlib Linux
+  binaries (`arnes-linux-x86_64`, `arnes-linux-aarch64`) built by the Release workflow;
+  the adapter fetches the latest one matching the container's arch automatically and only
+  builds from source if no asset matches. Set `ARNES_LINUX_BINARY_URL` to pin a specific
+  binary instead.
 - Harbor evaluates *model + harness together* — that's exactly Arnes's thesis, so a run
   matrix over `ARNES_MODEL` values measures how well the model-adaptive harness carries
   each model. Compare against the same models under Terminus/Claude Code adapters.

@@ -37,20 +37,33 @@ class ArnesAgent(BaseInstalledAgent):
                 ),
             )
             return
+        # Default: the static binary from the latest GitHub release, matched to the
+        # container's arch. Leaves nothing behind on failure so the source-build
+        # fallback below can detect it.
+        await self.exec_as_root(
+            environment,
+            'arch="$(uname -m)"; '
+            f'curl -fsSL "{ARNES_REPO}/releases/latest/download/arnes-linux-${{arch}}" '
+            "-o /usr/local/bin/arnes && chmod +x /usr/local/bin/arnes "
+            "&& arnes --help >/dev/null 2>&1 || rm -f /usr/local/bin/arnes",
+        )
         # Fallback: build from source (slow — a few minutes per container).
         await self.exec_as_root(
             environment,
-            "apt-get update && apt-get install -y curl git clang libcurl4-openssl-dev",
+            "command -v arnes >/dev/null || "
+            "(apt-get update && apt-get install -y curl git clang libcurl4-openssl-dev)",
         )
         await self.exec_as_root(
             environment,
+            "command -v arnes >/dev/null || "
             "curl -fsSL https://swift.org/install.sh | bash -s -- --yes || true",
         )
         await self.exec_as_agent(
             environment,
+            "command -v arnes >/dev/null || ("
             f"git clone --depth 1 {ARNES_REPO} /tmp/arnes-src && "
             "cd /tmp/arnes-src && swift build -c release && "
-            "cp .build/release/arnes /usr/local/bin/arnes",
+            "cp .build/release/arnes /usr/local/bin/arnes)",
         )
 
     @with_prompt_template
