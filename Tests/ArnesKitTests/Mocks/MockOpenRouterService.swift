@@ -89,13 +89,29 @@ final class MockOpenRouterService: OpenRouterService, @unchecked Sendable {
   /// callers (panel candidates) would otherwise race on the shared queue.
   var chunkScriptsByModel: [String: [[ChatCompletionChunk]]] = [:]
   var chatResponses: [ChatCompletionResponse] = []
+  var messagesEventScripts: [[MessagesStreamEvent]] = []
+  var responsesEventScripts: [[ResponsesStreamEvent]] = []
   var manifestJSON = "[]"
   private var recordedRequests: [ChatCompletionRequest] = []
+  private var recordedMessagesRequests: [MessagesRequest] = []
+  private var recordedResponsesRequests: [ResponsesRequest] = []
 
   var requests: [ChatCompletionRequest] {
     lock.lock()
     defer { lock.unlock() }
     return recordedRequests
+  }
+
+  var messagesRequests: [MessagesRequest] {
+    lock.lock()
+    defer { lock.unlock() }
+    return recordedMessagesRequests
+  }
+
+  var responsesRequests: [ResponsesRequest] {
+    lock.lock()
+    defer { lock.unlock() }
+    return recordedResponsesRequests
   }
 
   func chatCompletion(_ request: ChatCompletionRequest) async throws -> ChatCompletionResponse {
@@ -121,6 +137,34 @@ final class MockOpenRouterService: OpenRouterService, @unchecked Sendable {
     return AsyncThrowingStream { continuation in
       for chunk in script {
         continuation.yield(chunk)
+      }
+      continuation.finish()
+    }
+  }
+
+  func messageStream(_ request: MessagesRequest) async throws -> AsyncThrowingStream<MessagesStreamEvent, Error> {
+    let script: [MessagesStreamEvent]? = lock.withLock {
+      recordedMessagesRequests.append(request)
+      return messagesEventScripts.isEmpty ? nil : messagesEventScripts.removeFirst()
+    }
+    guard let script else { throw MockError.scriptExhausted }
+    return AsyncThrowingStream { continuation in
+      for event in script {
+        continuation.yield(event)
+      }
+      continuation.finish()
+    }
+  }
+
+  func responseStream(_ request: ResponsesRequest) async throws -> AsyncThrowingStream<ResponsesStreamEvent, Error> {
+    let script: [ResponsesStreamEvent]? = lock.withLock {
+      recordedResponsesRequests.append(request)
+      return responsesEventScripts.isEmpty ? nil : responsesEventScripts.removeFirst()
+    }
+    guard let script else { throw MockError.scriptExhausted }
+    return AsyncThrowingStream { continuation in
+      for event in script {
+        continuation.yield(event)
       }
       continuation.finish()
     }
@@ -186,6 +230,20 @@ enum Fixtures {
     response("""
       {"id":"gen-1","model":"\(model)","choices":[{"index":0,"message":{"role":"assistant","content":\(encodeJSONString(text))},"finish_reason":"stop"}],"usage":{"cost":\(cost)}}
       """)
+  }
+
+  static func messagesEvent(_ json: String) -> MessagesStreamEvent {
+    try! JSONDecoder().decode(MessagesStreamEvent.self, from: Data(json.utf8))
+  }
+
+  static func responsesEvent(_ json: String) -> ResponsesStreamEvent {
+    try! JSONDecoder().decode(ResponsesStreamEvent.self, from: Data(json.utf8))
+  }
+
+  /// Round-trips any Encodable through JSON for structural assertions on
+  /// encode-only request types.
+  static func jsonValue<T: Encodable>(_ value: T) -> JSONValue {
+    try! JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(value))
   }
 
   /// A minimal manifest entry; `tools` in supported_parameters by default.

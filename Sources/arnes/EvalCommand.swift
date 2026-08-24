@@ -30,7 +30,11 @@ struct Eval: AsyncParsableCommand {
   @Option(help: "Max agent steps per trial.")
   var maxSteps = 30
 
+  @Option(help: "Wire dialect: auto (native per model family), chat, messages, or responses. Run the same suite twice with different forced dialects for an A/B.")
+  var dialect = "auto"
+
   func run() async throws {
+    let dialectOverride = try parseDialect(dialect)
     let service = try makeService()
     var loaded = try EvalSuite.load(path: suite)
     if let task {
@@ -45,13 +49,16 @@ struct Eval: AsyncParsableCommand {
     print(ANSI.dim("suite \(loaded.name) · \(loaded.tasks.count) tasks · \(modelList.count) models · \(trials) trial(s) → \(totalTrials) runs\n"))
 
     let runner = EvalRunner(service: service, maxSteps: maxSteps)
-    let outcomes = await runner.run(suite: loaded, models: modelList, trials: trials) { progress in
+    let outcomes = await runner.run(
+      suite: loaded, models: modelList, trials: trials, dialect: dialectOverride)
+    { progress in
       switch progress {
       case .trialStarted(let taskId, let model, let trial):
         print(ANSI.dim("▶ \(taskId) · \(model) · trial \(trial)"))
       case .trialFinished(let outcome):
         let mark = outcome.checkPassed ? ANSI.green("✓") : ANSI.red("✗")
         var line = "\(mark) \(outcome.taskId) · \(outcome.model)"
+          + (outcome.dialect.map { " · \($0)" } ?? "")
           + " · \(outcome.steps) steps · \(Renderer.usd(outcome.costUSD))"
           + String(format: " · %.1fs", outcome.durationSeconds)
         if let error = outcome.error {

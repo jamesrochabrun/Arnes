@@ -111,11 +111,18 @@ Code and Codex CLI — with `ARNES_MODEL` selecting the model per run.
   (`response.model` post-routing); run records keep the requested → served mapping.
 - **Stateless by design**: OpenRouter holds no conversation state; history lives client-side
   in the `Session` — which is exactly what makes mid-conversation `/model` swaps possible.
+- **Dialect-native transport**: Anthropic models run on `/messages` and OpenAI models on
+  `/responses` (chat-completions for everyone else) — chosen per model automatically, forced
+  with `--dialect` for A/Bs. History stays chat-shaped internally and is translated per
+  request, so `/model` swaps work *across* dialects mid-conversation. On the starter suite,
+  claude-haiku-4.5 native vs chat: same 8/8 pass, −15% cost, −11% steps, −14% time.
 
 ## Status
 
-v0.2+ — interactive REPL (permission gating, streaming, Ctrl-C interrupt), mid-session
-`/model` swap, session persistence + resume, coding tools (`edit_file`/`grep`/`glob`), and
-context compaction (`/compact` + auto at ~80% full, live `ctx N%` in the status line), on top
-of the v0.1 loop (inline verification, run records). Next: subagents, dialect-native
-execution, MCP. Roadmap in [DESIGN.md](DESIGN.md).
+v0.3 — dialect-native execution (`/messages`, `/responses`, per-model auto + `--dialect`),
+`--panel N` (parallel candidates, judge, labeled eval rows), eval framework (`arnes eval`,
+bash checks as ground truth), CI (macOS + Linux) with static Linux release binaries and a
+Terminal-Bench/Harbor adapter, on top of v0.2's interactive REPL (permission gating,
+mid-session `/model` swap, persistence + resume, coding tools, context compaction) and the
+v0.1 loop (inline verification, run records). Next: conformance probe, subagents, MCP.
+Roadmap in [DESIGN.md](DESIGN.md).

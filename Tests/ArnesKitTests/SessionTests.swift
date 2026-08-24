@@ -191,7 +191,13 @@ final class SessionTests: XCTestCase {
       Fixtures.manifestModel(id: "openai/gpt-test"))
     mock.chunkScripts = [
       [Fixtures.textChunk("first"), Fixtures.usageChunk(cost: 0.01)],
-      [Fixtures.textChunk("second"), Fixtures.usageChunk(cost: 0.01)],
+    ]
+    // The swap lands on an openai/* model, which executes natively on /responses.
+    mock.responsesEventScripts = [
+      [
+        Fixtures.responsesEvent(#"{"type":"response.output_text.delta","delta":"second"}"#),
+        Fixtures.responsesEvent(#"{"type":"response.completed","response":{"id":"r1","model":"openai/gpt-test","output":[],"usage":{"cost":0.01,"input_tokens":5}}}"#),
+      ],
     ]
     let session = Session(
       service: mock,
@@ -204,14 +210,21 @@ final class SessionTests: XCTestCase {
     XCTAssertTrue(profile.supportsTools)
     _ = try await drain(await session.send("turn two"))
 
-    let second = mock.requests[1]
+    let second = try XCTUnwrap(mock.responsesRequests.first)
     XCTAssertEqual(second.model, "openai/gpt-test")
-    // The system prompt is rebuilt for the new family's pack…
-    XCTAssertTrue(second.messages[0].content?.testText.contains("exact JSON arguments") == true)
-    // …and the full prior conversation rides along.
-    XCTAssertEqual(second.messages[1].content?.testText, "turn one")
-    XCTAssertEqual(second.messages[2].content?.testText, "first")
-    XCTAssertEqual(second.messages[3].content?.testText, "turn two")
+    // The system prompt is rebuilt for the new family's pack (as `instructions`)…
+    XCTAssertTrue(second.instructions?.contains("exact JSON arguments") == true)
+    // …and the full prior conversation rides along, translated to input items.
+    let items = Fixtures.jsonValue(second.input).arrayValue ?? []
+    XCTAssertEqual(items.count, 3)
+    XCTAssertEqual(items[0]["role"]?.stringValue, "user")
+    XCTAssertEqual(items[0]["content"]?.stringValue, "turn one")
+    XCTAssertEqual(items[1]["role"]?.stringValue, "assistant")
+    XCTAssertEqual(items[1]["content"]?.stringValue, "first")
+    XCTAssertEqual(items[2]["content"]?.stringValue, "turn two")
+    let maybeRecord = await session.lastRecord
+    let record = try XCTUnwrap(maybeRecord)
+    XCTAssertEqual(record.dialect, "responses")
   }
 
   func testInterruptLeavesNoDanglingToolCalls() async throws {

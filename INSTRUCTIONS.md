@@ -52,6 +52,8 @@ Sources/ArnesKit/
   RunRecord.swift          # eval substrate → ~/.arnes/runs.jsonl (now with sessionId/turnIndex)
   Eval.swift               # EvalTask/Suite/Runner/Stats → ~/.arnes/evals.jsonl (arnes eval)
   Panel.swift              # loop 2: --panel N — snapshot workdirs, parallel candidates, judge, winner sync
+  MessagesDialect.swift    # /messages native path: chat history → Anthropic shapes + stream accumulator
+  ResponsesDialect.swift   # /responses native path: chat history → OpenAI shapes + stream accumulator
 Sources/arnes/             # the CLI
   ArnesCommand.swift       # root: interactive (default) · chat · do · models · status · runs · sessions
   Interactive.swift        # REPL: turns, slash commands, SIGINT→cancel, TerminalPermissions
@@ -94,7 +96,12 @@ Sources/arnes/             # the CLI
       model picks the winner from reports + diffs, the winner's changes sync back
       (`--no-apply` to keep the snapshot), and every candidate lands as a labeled
       `EvalOutcome` (suite "panel") — real work grows the eval history for free
-- [ ] Dialect-native execution (`/messages`, `/responses`)
+- [x] Dialect-native execution — `Session` executes `/messages` (Anthropic) and `/responses`
+      (OpenAI) natively, chosen per model family by `DialectOverride.auto` (forced with
+      `--dialect` on `do`/`eval` for A/Bs). History stays chat-shaped and is translated per
+      request (`MessagesDialect`/`ResponsesDialect`), so cross-dialect `/model` swaps keep
+      working; `RunRecord.dialect`/`EvalOutcome.dialect` record what actually executed.
+      Live A/B on evals/basics: haiku native = same pass rate, −15% cost, −14% time.
 - [ ] Conformance probe + cached model profiles
 - [ ] Panel policy triggers (e.g. auto-panel after verifier rejections); `subtask` tool (nested Session)
 - [ ] MCP tool provider (`~/.arnes/mcp.json`)

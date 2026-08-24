@@ -33,15 +33,20 @@ public actor Session {
     public var model: String
     public var fallbackModels: [String]
     public var maxStepsPerTurn: Int
+    /// Wire dialect selection; `.auto` follows the model's profile (native for
+    /// Anthropic/OpenAI families, chat otherwise).
+    public var dialect: DialectOverride
 
     public init(
       model: String = "openrouter/auto",
       fallbackModels: [String] = [],
-      maxStepsPerTurn: Int = 30)
+      maxStepsPerTurn: Int = 30,
+      dialect: DialectOverride = .auto)
     {
       self.model = model
       self.fallbackModels = fallbackModels
       self.maxStepsPerTurn = maxStepsPerTurn
+      self.dialect = dialect
     }
   }
 
@@ -83,6 +88,7 @@ public actor Session {
   private let sessionStore: SessionStore?
   private let fallbackModels: [String]
   private let maxStepsPerTurn: Int
+  private let dialectOverride: DialectOverride
   private var alwaysAllowedTools: Set<String> = []
   private var turnTask: Task<Void, Never>?
   private var turnIndex: Int
@@ -118,6 +124,7 @@ public actor Session {
     self.sessionStore = sessionStore
     fallbackModels = configuration.fallbackModels
     maxStepsPerTurn = configuration.maxStepsPerTurn
+    dialectOverride = configuration.dialect
     turnIndex = 0
     metaWritten = false
   }
@@ -144,6 +151,7 @@ public actor Session {
     self.sessionStore = sessionStore
     fallbackModels = configuration.fallbackModels
     maxStepsPerTurn = configuration.maxStepsPerTurn
+    dialectOverride = configuration.dialect
     turnIndex = loaded.turnCount
     metaWritten = true
     compactionSummary = loaded.compactionSummary
@@ -344,10 +352,12 @@ public actor Session {
         keptMessages: result.keptMessages))
     }
 
+    // The dialect actually executed this turn — recorded, not just preferred.
+    let dialect = dialectOverride.effective(for: profile)
     var record = RunRecord(
       task: text,
       model: model,
-      dialect: profile.dialect.rawValue,
+      dialect: dialect.rawValue,
       packFamily: profile.family.rawValue)
     record.sessionId = id
     record.turnIndex = turnIndex
@@ -358,7 +368,6 @@ public actor Session {
 
     var turnCost = 0.0
     var finalText = ""
-    var lastRouted: String?
     var interrupted = false
     var turnError: Error?
 
@@ -369,62 +378,46 @@ public actor Session {
       }
       record.steps += 1
 
-      var accumulator = StreamAccumulator()
+      let step: StepOutcome
       do {
-        let stream = try await service.chatCompletionStream(
-          ChatCompletionRequest(
-            model: model,
-            models: fallbackModels.isEmpty ? nil : fallbackModels,
-            messages: [.system(systemText(pack: pack))] + history,
-            tools: profile.supportsTools ? tools.map(\.toolDefinition) : nil))
-        for try await chunk in stream {
-          let deltas = accumulator.ingest(chunk)
-          // Surface routing as soon as the served model is known, before any text.
-          if let routed = accumulator.routedModel, routed != lastRouted {
-            lastRouted = routed
-            if !record.routedModels.contains(routed) {
-              record.routedModels.append(routed)
-            }
-            continuation.yield(.routed(model: routed, provider: accumulator.provider))
-          }
-          if let textDelta = deltas.text {
-            continuation.yield(.textDelta(textDelta))
-          }
-          if let reasoningDelta = deltas.reasoning {
-            continuation.yield(.reasoningDelta(reasoningDelta))
-          }
-        }
-      } catch is CancellationError {
-        interrupted = true
+        step = try await streamStep(
+          dialect: dialect,
+          pack: pack,
+          profile: profile,
+          knownRouted: record.routedModels,
+          continuation: continuation)
       } catch {
         turnError = error
         break loop
       }
 
-      if let cost = accumulator.usage?.cost {
+      for served in step.routed where !record.routedModels.contains(served) {
+        record.routedModels.append(served)
+      }
+      if let cost = step.cost {
         record.costUSD += cost
         turnCost += cost
         costUSD += cost
       }
-      if let promptTokens = accumulator.usage?.promptTokens {
+      if let promptTokens = step.promptTokens {
         lastPromptTokens = promptTokens
       }
-      if Task.isCancelled {
+      if step.interrupted || Task.isCancelled {
         // Nothing from this step is in the history yet — safe to stop here.
         interrupted = true
         break loop
       }
 
-      if !accumulator.text.isEmpty {
-        finalText = accumulator.text
-        lastAssistantText = accumulator.text
-        continuation.yield(.assistantText(accumulator.text))
+      if !step.text.isEmpty {
+        finalText = step.text
+        lastAssistantText = step.text
+        continuation.yield(.assistantText(step.text))
       }
 
-      let toolCalls = accumulator.toolCalls
+      let toolCalls = step.toolCalls
       guard !toolCalls.isEmpty else {
-        if !accumulator.text.isEmpty {
-          appendToHistory(.assistant(accumulator.text))
+        if !step.text.isEmpty {
+          appendToHistory(.assistant(step.text))
         }
         record.finished = true
         break loop
@@ -432,7 +425,7 @@ public actor Session {
 
       appendToHistory(Message(
         role: .assistant,
-        content: accumulator.text.isEmpty ? nil : .text(accumulator.text),
+        content: step.text.isEmpty ? nil : .text(step.text),
         toolCalls: toolCalls))
 
       var answered: Set<String> = []
@@ -506,6 +499,175 @@ public actor Session {
       promptTokens: lastPromptTokens,
       contextLength: profile.contextLength)))
     continuation.finish()
+  }
+
+  // MARK: Dialect steps
+
+  /// One streamed assistant step, accumulated dialect-agnostically. The loop above
+  /// consumes this shape regardless of the wire format the step spoke.
+  private struct StepOutcome {
+    var text = ""
+    var toolCalls: [ToolCall] = []
+    var cost: Double?
+    var promptTokens: Int?
+    /// Served models observed this step, in order.
+    var routed: [String] = []
+    var interrupted = false
+  }
+
+  private func streamStep(
+    dialect: Dialect,
+    pack: PromptPack,
+    profile: ModelProfile,
+    knownRouted: [String],
+    continuation: AsyncThrowingStream<AgentEvent, Error>.Continuation)
+    async throws -> StepOutcome
+  {
+    switch dialect {
+    case .chat:
+      return try await chatStep(
+        pack: pack, profile: profile, knownRouted: knownRouted, continuation: continuation)
+    case .messages:
+      return try await messagesStep(
+        pack: pack, profile: profile, knownRouted: knownRouted, continuation: continuation)
+    case .responses:
+      return try await responsesStep(
+        pack: pack, profile: profile, knownRouted: knownRouted, continuation: continuation)
+    }
+  }
+
+  private func chatStep(
+    pack: PromptPack,
+    profile: ModelProfile,
+    knownRouted: [String],
+    continuation: AsyncThrowingStream<AgentEvent, Error>.Continuation)
+    async throws -> StepOutcome
+  {
+    var outcome = StepOutcome()
+    var accumulator = StreamAccumulator()
+    do {
+      let stream = try await service.chatCompletionStream(
+        ChatCompletionRequest(
+          model: model,
+          models: fallbackModels.isEmpty ? nil : fallbackModels,
+          messages: [.system(systemText(pack: pack))] + history,
+          tools: profile.supportsTools ? tools.map(\.toolDefinition) : nil))
+      for try await chunk in stream {
+        let deltas = accumulator.ingest(chunk)
+        // Surface routing as soon as the served model is known, before any text.
+        noteRouted(
+          accumulator.routedModel, provider: accumulator.provider,
+          outcome: &outcome, knownRouted: knownRouted, continuation: continuation)
+        yieldDeltas(text: deltas.text, reasoning: deltas.reasoning, continuation: continuation)
+      }
+    } catch is CancellationError {
+      outcome.interrupted = true
+    }
+    outcome.text = accumulator.text
+    outcome.toolCalls = accumulator.toolCalls
+    outcome.cost = accumulator.usage?.cost
+    outcome.promptTokens = accumulator.usage?.promptTokens
+    return outcome
+  }
+
+  private func messagesStep(
+    pack: PromptPack,
+    profile: ModelProfile,
+    knownRouted: [String],
+    continuation: AsyncThrowingStream<AgentEvent, Error>.Continuation)
+    async throws -> StepOutcome
+  {
+    var outcome = StepOutcome()
+    var accumulator = MessagesAccumulator()
+    do {
+      let stream = try await service.messageStream(
+        MessagesRequest(
+          model: model,
+          messages: MessagesTranslator.history(history),
+          maxTokens: MessagesTranslator.maxOutputTokens,
+          system: systemText(pack: pack),
+          tools: profile.supportsTools ? tools.map(MessagesTranslator.tool) : nil,
+          models: fallbackModels.isEmpty ? nil : fallbackModels))
+      for try await event in stream {
+        let deltas = accumulator.ingest(event)
+        noteRouted(
+          accumulator.routedModel, provider: nil,
+          outcome: &outcome, knownRouted: knownRouted, continuation: continuation)
+        yieldDeltas(text: deltas.text, reasoning: deltas.reasoning, continuation: continuation)
+      }
+    } catch is CancellationError {
+      outcome.interrupted = true
+    }
+    outcome.text = accumulator.text
+    outcome.toolCalls = accumulator.toolCalls
+    outcome.cost = accumulator.cost
+    outcome.promptTokens = accumulator.promptTokens
+    return outcome
+  }
+
+  private func responsesStep(
+    pack: PromptPack,
+    profile: ModelProfile,
+    knownRouted: [String],
+    continuation: AsyncThrowingStream<AgentEvent, Error>.Continuation)
+    async throws -> StepOutcome
+  {
+    var outcome = StepOutcome()
+    var accumulator = ResponsesAccumulator()
+    do {
+      let stream = try await service.responseStream(
+        ResponsesRequest(
+          model: model,
+          models: fallbackModels.isEmpty ? nil : fallbackModels,
+          input: .items(ResponsesTranslator.history(history)),
+          instructions: systemText(pack: pack),
+          tools: profile.supportsTools ? tools.map(ResponsesTranslator.tool) : nil))
+      for try await event in stream {
+        let deltas = accumulator.ingest(event)
+        noteRouted(
+          accumulator.routedModel, provider: nil,
+          outcome: &outcome, knownRouted: knownRouted, continuation: continuation)
+        yieldDeltas(text: deltas.text, reasoning: deltas.reasoning, continuation: continuation)
+      }
+    } catch is CancellationError {
+      outcome.interrupted = true
+    }
+    if !outcome.interrupted, let failure = accumulator.failure {
+      throw DialectError.responsesFailed(failure)
+    }
+    outcome.text = accumulator.text
+    outcome.toolCalls = accumulator.toolCalls
+    outcome.cost = accumulator.cost
+    outcome.promptTokens = accumulator.promptTokens
+    return outcome
+  }
+
+  /// Records a served model on the step and surfaces it once per turn.
+  private func noteRouted(
+    _ served: String?,
+    provider: String?,
+    outcome: inout StepOutcome,
+    knownRouted: [String],
+    continuation: AsyncThrowingStream<AgentEvent, Error>.Continuation)
+  {
+    guard let served, !outcome.routed.contains(served) else { return }
+    outcome.routed.append(served)
+    if !knownRouted.contains(served) {
+      continuation.yield(.routed(model: served, provider: provider))
+    }
+  }
+
+  private func yieldDeltas(
+    text: String?,
+    reasoning: String?,
+    continuation: AsyncThrowingStream<AgentEvent, Error>.Continuation)
+  {
+    if let text {
+      continuation.yield(.textDelta(text))
+    }
+    if let reasoning {
+      continuation.yield(.reasoningDelta(reasoning))
+    }
   }
 
   /// The prompt pack for the current model, plus the compaction summary when one exists.

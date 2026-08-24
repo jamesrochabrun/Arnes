@@ -5,6 +5,13 @@ import OpenRouterSwift
 
 // MARK: - Shared setup
 
+func parseDialect(_ raw: String) throws -> DialectOverride {
+  guard let dialect = DialectOverride(rawValue: raw) else {
+    throw ValidationError("unknown dialect '\(raw)' — use auto, chat, messages, or responses")
+  }
+  return dialect
+}
+
 func makeService() throws -> OpenRouterService {
   guard let key = ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"], !key.isEmpty else {
     throw ValidationError("Set OPENROUTER_API_KEY in your environment.")
@@ -87,6 +94,9 @@ struct Do: AsyncParsableCommand {
   @Flag(help: "Deny all mutating tools (read-only run).")
   var safe = false
 
+  @Option(help: "Wire dialect: auto (native per model family), chat, messages, or responses.")
+  var dialect = "auto"
+
   @Option(help: "Fan the task to N isolated candidates (models from -m, cycled to N) and keep the judged winner.")
   var panel: Int?
 
@@ -110,6 +120,7 @@ struct Do: AsyncParsableCommand {
       model: model,
       fallbackModels: fallback.split(separator: ",").map(String.init),
       verifierModel: verify,
+      dialect: parseDialect(dialect),
       onEvent: { event in
         switch event {
         case .assistantText(let text):
@@ -132,7 +143,7 @@ struct Do: AsyncParsableCommand {
       })
     let record = result.record
     let routed = record.routedModels.joined(separator: ", ")
-    print("\n[requested \(record.model) → served by \(routed.isEmpty ? "?" : routed) · \(record.steps) steps · \(record.toolCalls) tool calls · $\(String(format: "%.4f", record.costUSD))]")
+    print("\n[requested \(record.model) → served by \(routed.isEmpty ? "?" : routed) · dialect \(record.dialect) · \(record.steps) steps · \(record.toolCalls) tool calls · $\(String(format: "%.4f", record.costUSD))]")
   }
 
   private func runPanel(service: OpenRouterService) async throws {
@@ -153,6 +164,7 @@ struct Do: AsyncParsableCommand {
       judgeModel: judge,
       baseDirectory: URL(fileURLWithPath: FileManager.default.currentDirectoryPath),
       apply: !noApply,
+      dialect: parseDialect(dialect),
       onProgress: { progress in
         switch progress {
         case .candidateStarted(let index, let model):

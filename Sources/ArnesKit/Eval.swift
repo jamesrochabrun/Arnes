@@ -89,6 +89,8 @@ public struct EvalOutcome: Codable, Sendable {
   public var routedModels: [String]
   /// Timeout or thrown error, when the trial did not complete normally.
   public var error: String?
+  /// The wire dialect the agent executed with (nil for pre-dialect rows).
+  public var dialect: String?
 }
 
 /// Append-only JSONL store at `~/.arnes/evals.jsonl` — the growing eval history.
@@ -155,6 +157,7 @@ public final class EvalRunner: @unchecked Sendable {
     suite: EvalSuite,
     models: [String],
     trials: Int = 1,
+    dialect: DialectOverride = .auto,
     onProgress: @escaping @Sendable (Progress) -> Void = { _ in })
     async -> [EvalOutcome]
   {
@@ -163,7 +166,8 @@ public final class EvalRunner: @unchecked Sendable {
       for task in suite.tasks {
         for trial in 1...max(1, trials) {
           onProgress(.trialStarted(taskId: task.id, model: model, trial: trial))
-          let outcome = await runTrial(suite: suite.name, task: task, model: model, trial: trial)
+          let outcome = await runTrial(
+            suite: suite.name, task: task, model: model, trial: trial, dialect: dialect)
           try? store.append(outcome)
           outcomes.append(outcome)
           onProgress(.trialFinished(outcome))
@@ -173,7 +177,14 @@ public final class EvalRunner: @unchecked Sendable {
     return outcomes
   }
 
-  private func runTrial(suite: String, task: EvalTask, model: String, trial: Int) async -> EvalOutcome {
+  private func runTrial(
+    suite: String,
+    task: EvalTask,
+    model: String,
+    trial: Int,
+    dialect: DialectOverride)
+    async -> EvalOutcome
+  {
     let startedAt = Date()
     var outcome = EvalOutcome(
       suite: suite,
@@ -188,7 +199,8 @@ public final class EvalRunner: @unchecked Sendable {
       durationSeconds: 0,
       startedAt: startedAt,
       routedModels: [],
-      error: nil)
+      error: nil,
+      dialect: nil)
 
     let workdir = FileManager.default.temporaryDirectory
       .appendingPathComponent("arnes-eval-\(UUID().uuidString)")
@@ -228,7 +240,7 @@ public final class EvalRunner: @unchecked Sendable {
     { group in
       group.addTask {
         do {
-          return .success(try await agent.run(task: prompt, model: model))
+          return .success(try await agent.run(task: prompt, model: model, dialect: dialect))
         } catch {
           return .failure(error)
         }
@@ -249,6 +261,7 @@ public final class EvalRunner: @unchecked Sendable {
       outcome.toolCalls = result.record.toolCalls
       outcome.costUSD = result.record.costUSD
       outcome.routedModels = result.record.routedModels
+      outcome.dialect = result.record.dialect
     case .failure(let error):
       outcome.error = "\(error)"
     case nil:

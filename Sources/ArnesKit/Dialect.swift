@@ -4,10 +4,10 @@ import Foundation
 /// **dialect-native transport**: talk to every model in its home format so
 /// nothing is lost in translation.
 ///
-/// v0 executes all agent loops over `.chat` (OpenRouter normalizes it for every
-/// model); `.messages` and `.responses` become the native paths for Anthropic
-/// and OpenAI families as the loop matures. `preferredDialect` already reports
-/// the target dialect so callers can route ahead of that switch.
+/// The agent loop executes all three: `.chat` is the universal default, and
+/// `.messages`/`.responses` are the native paths for the Anthropic and OpenAI
+/// families. History stays chat-shaped internally and is translated per request,
+/// which is what keeps mid-session `/model` swaps working across dialects.
 public enum Dialect: String, Sendable {
   /// OpenAI chat-completions shape — the universal default.
   case chat
@@ -15,6 +15,26 @@ public enum Dialect: String, Sendable {
   case messages
   /// OpenResponses shape — native for `openai/*` models.
   case responses
+}
+
+/// How a session picks the wire dialect for each turn. `.auto` follows the model's
+/// `ModelProfile.dialect` (native for known families, chat otherwise); the forced
+/// modes exist for A/B evals and debugging.
+public enum DialectOverride: String, Sendable, CaseIterable {
+  case auto
+  case chat
+  case messages
+  case responses
+
+  /// The dialect to execute for `profile`, honoring the override.
+  public func effective(for profile: ModelProfile) -> Dialect {
+    switch self {
+    case .auto: return profile.dialect
+    case .chat: return .chat
+    case .messages: return .messages
+    case .responses: return .responses
+    }
+  }
 }
 
 /// A model family, inferred from the OpenRouter slug's author prefix.

@@ -67,6 +67,7 @@ public final class Agent: @unchecked Sendable {
     model: String,
     fallbackModels: [String] = [],
     verifierModel: String? = nil,
+    dialect: DialectOverride = .auto,
     onEvent: @escaping @Sendable (AgentEvent) -> Void = { _ in })
     async throws -> AgentResult
   {
@@ -78,7 +79,8 @@ public final class Agent: @unchecked Sendable {
       configuration: Session.Configuration(
         model: model,
         fallbackModels: fallbackModels,
-        maxStepsPerTurn: maxSteps))
+        maxStepsPerTurn: maxSteps,
+        dialect: dialect))
 
     var finalText = ""
     for try await event in await session.send(task, verifyWith: verifierModel) {

@@ -93,6 +93,7 @@ public final class PanelRunner: @unchecked Sendable {
     judgeModel: String,
     baseDirectory: URL,
     apply: Bool = true,
+    dialect: DialectOverride = .auto,
     onProgress: @escaping @Sendable (Progress) -> Void = { _ in })
     async throws -> PanelResult
   {
@@ -108,6 +109,7 @@ public final class PanelRunner: @unchecked Sendable {
       models: models,
       base: base,
       panelDir: panelDir,
+      dialect: dialect,
       onProgress: onProgress)
     candidates.sort { $0.index < $1.index }
 
@@ -155,6 +157,7 @@ public final class PanelRunner: @unchecked Sendable {
     models: [String],
     base: URL,
     panelDir: URL,
+    dialect: DialectOverride,
     onProgress: @escaping @Sendable (Progress) -> Void)
     async -> [PanelCandidate]
   {
@@ -163,7 +166,8 @@ public final class PanelRunner: @unchecked Sendable {
         group.addTask {
           onProgress(.candidateStarted(index: index, model: model))
           let candidate = await self.runCandidate(
-            task: task, model: model, index: index, base: base, panelDir: panelDir)
+            task: task, model: model, index: index, base: base, panelDir: panelDir,
+            dialect: dialect)
           onProgress(.candidateFinished(candidate))
           return candidate
         }
@@ -181,7 +185,8 @@ public final class PanelRunner: @unchecked Sendable {
     model: String,
     index: Int,
     base: URL,
-    panelDir: URL)
+    panelDir: URL,
+    dialect: DialectOverride)
     async -> PanelCandidate
   {
     let started = Date()
@@ -209,7 +214,7 @@ public final class PanelRunner: @unchecked Sendable {
     { group in
       group.addTask {
         do {
-          return .success(try await agent.run(task: prompt, model: model))
+          return .success(try await agent.run(task: prompt, model: model, dialect: dialect))
         } catch {
           return .failure(error)
         }
@@ -335,7 +340,8 @@ public final class PanelRunner: @unchecked Sendable {
       durationSeconds: candidate.durationSeconds,
       startedAt: candidate.record?.startedAt ?? Date(),
       routedModels: candidate.record?.routedModels ?? [],
-      error: candidate.error)
+      error: candidate.error,
+      dialect: candidate.record?.dialect)
   }
 
   // MARK: Directory plumbing
