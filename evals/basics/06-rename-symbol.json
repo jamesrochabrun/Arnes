@@ -1,0 +1,6 @@
+{
+  "id": "rename-symbol",
+  "prompt": "Rename the function compute_total to calculate_total everywhere in app.py, keeping the program's behavior identical.",
+  "setup": "printf 'def compute_total(values):\\n    return sum(values)\\n\\nif __name__ == \"__main__\":\\n    print(compute_total([1, 2, 3]))\\n' > app.py",
+  "check": "grep -q 'def calculate_total' app.py && ! grep -q 'compute_total' app.py && test \"$(python3 app.py)\" = 6"
+}

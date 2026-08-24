@@ -2,6 +2,9 @@ import ArgumentParser
 import ArnesKit
 import Foundation
 import OpenRouterSwift
+#if canImport(Glibc)
+import Glibc
+#endif
 
 // MARK: - TerminalPermissions
 
@@ -42,7 +45,7 @@ struct TerminalPermissions: PermissionDelegate {
     var original = termios()
     tcgetattr(STDIN_FILENO, &original)
     var raw = original
-    raw.c_lflag &= ~UInt(ICANON | ECHO)
+    raw.c_lflag &= ~tcflag_t(ICANON | ECHO)
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw)
     defer {
       var restore = original

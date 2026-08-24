@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(Glibc)
+import Glibc
+#endif
 
 /// Terminal styling, gated on stdout being a TTY so piped output stays clean.
 enum ANSI {

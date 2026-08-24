@@ -76,7 +76,20 @@ arnes status
 
 # the local scoreboard: cost + verifier pass-rate per model
 arnes runs
+
+# evals: models × tasks × trials in isolated workdirs, scored by check scripts
+arnes eval evals/basics -m anthropic/claude-haiku-4.5,openai/gpt-4o-mini -t 3
+# ✓ fix-bug · anthropic/claude-haiku-4.5 · 5 steps · $0.0112 · 14.1s
+# model                        pass        cost      steps  time   errors
+# anthropic/claude-haiku-4.5   24/24 (100%)  $0.15   3.4    8.5s   0
 ```
+
+Evals append to `~/.arnes/evals.jsonl` (and feed the `runs` scoreboard). A task is one
+JSON file — prompt + optional bash `setup` + a bash `check` whose exit code is the ground
+truth — so adding your own suite is trivial. For the industry benchmark,
+`benchmarks/terminal-bench/` has a [Harbor](https://www.harborframework.com) adapter to run
+Arnes on [Terminal-Bench](https://www.tbench.ai) — the same harness used to score Claude
+Code and Codex CLI — with `ARNES_MODEL` selecting the model per run.
 
 ## What's inside
 

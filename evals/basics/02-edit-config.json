@@ -1,0 +1,6 @@
+{
+  "id": "edit-config",
+  "prompt": "In config.txt, change the port from 8080 to 9090. Do not modify any other line.",
+  "setup": "printf 'host=localhost\\nport=8080\\ndebug=false\\n' > config.txt",
+  "check": "grep -q 'port=9090' config.txt && grep -q 'host=localhost' config.txt && grep -q 'debug=false' config.txt && test \"$(wc -l < config.txt | tr -d ' ')\" = 3"
+}

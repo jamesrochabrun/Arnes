@@ -1,0 +1,6 @@
+{
+  "id": "csv-sum",
+  "prompt": "sales.csv has columns name,amount. Compute the total of the amount column and write just that number to total.txt.",
+  "setup": "printf 'name,amount\\nwidget,150\\ngadget,75\\ndoohickey,25\\n' > sales.csv",
+  "check": "test \"$(cat total.txt | tr -d ' \\n')\" = 250"
+}

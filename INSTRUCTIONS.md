@@ -50,6 +50,7 @@ Sources/ArnesKit/
   Agent.swift              # headless one-shot wrapper over Session (arnes do)
   SessionStore.swift       # TranscriptEntry JSONL → ~/.arnes/sessions/<id>.jsonl
   RunRecord.swift          # eval substrate → ~/.arnes/runs.jsonl (now with sessionId/turnIndex)
+  Eval.swift               # EvalTask/Suite/Runner/Stats → ~/.arnes/evals.jsonl (arnes eval)
 Sources/arnes/             # the CLI
   ArnesCommand.swift       # root: interactive (default) · chat · do · models · status · runs · sessions
   Interactive.swift        # REPL: turns, slash commands, SIGINT→cancel, TerminalPermissions
@@ -83,6 +84,10 @@ Sources/arnes/             # the CLI
 - [x] Context compaction — `/compact` + auto at ~80% of `profile.contextLength`; summary rides
       the system prompt, last user turn kept verbatim, persisted as a `compaction` entry;
       status line shows live `ctx N%`
+- [x] Eval framework — `arnes eval <suite>`: models × tasks × trials in isolated temp
+      workdirs, bash `check` scripts as ground truth, per-model stats (pass rate, cost,
+      steps, time), outcomes → ~/.arnes/evals.jsonl; starter suite in evals/basics;
+      Terminal-Bench/Harbor adapter in benchmarks/terminal-bench
 - [ ] Dialect-native execution (`/messages`, `/responses`)
 - [ ] Conformance probe + cached model profiles
 - [ ] `--panel N` (worktree isolation, judge, labeled eval rows); `subtask` tool (nested Session)

@@ -1,0 +1,6 @@
+{
+  "id": "json-extract",
+  "prompt": "Read data.json and write the value of the \"version\" field (just the value, nothing else) to version.txt.",
+  "setup": "printf '{\"name\": \"widget\", \"version\": \"2.4.1\", \"private\": true}' > data.json",
+  "check": "test \"$(cat version.txt | tr -d ' \\n')\" = '2.4.1'"
+}

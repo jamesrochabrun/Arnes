@@ -1,0 +1,5 @@
+{
+  "id": "create-file",
+  "prompt": "Create a file named hello.txt containing exactly this line: hello from arnes",
+  "check": "test \"$(cat hello.txt)\" = 'hello from arnes'"
+}

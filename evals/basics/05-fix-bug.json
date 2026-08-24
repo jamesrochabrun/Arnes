@@ -1,0 +1,6 @@
+{
+  "id": "fix-bug",
+  "prompt": "sum.py should print the sum of the numbers in numbers.txt but it prints the wrong value. Fix the bug so `python3 sum.py` prints the correct sum.",
+  "setup": "printf '10\\n20\\n30\\n40\\n' > numbers.txt && printf 'total = 0\\nwith open(\"numbers.txt\") as f:\\n    lines = f.read().splitlines()\\nfor line in lines[:-1]:\\n    total += int(line)\\nprint(total)\\n' > sum.py",
+  "check": "test \"$(python3 sum.py)\" = 100"
+}

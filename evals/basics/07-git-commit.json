@@ -1,0 +1,5 @@
+{
+  "id": "git-commit",
+  "prompt": "Initialize a git repository here, create a file README.md with the title '# Demo', and commit it with the message 'initial commit'.",
+  "check": "git rev-parse --git-dir >/dev/null 2>&1 && git log --format=%s | grep -q 'initial commit' && git show HEAD:README.md | grep -q '# Demo'"
+}

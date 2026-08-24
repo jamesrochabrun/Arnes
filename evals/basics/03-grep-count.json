@@ -1,0 +1,6 @@
+{
+  "id": "grep-count",
+  "prompt": "Count how many lines across all .txt files in this directory contain the word TODO, and write just that number to result.txt.",
+  "setup": "printf 'TODO: one\\nok\\nTODO: two\\n' > a.txt && printf 'nothing\\n' > b.txt && printf 'TODO: three\\n' > c.txt",
+  "check": "test \"$(cat result.txt | tr -d ' \\n')\" = 3"
+}

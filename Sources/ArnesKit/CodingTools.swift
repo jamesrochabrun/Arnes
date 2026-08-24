@@ -1,5 +1,8 @@
 import Foundation
 import OpenRouterSwift
+#if canImport(Glibc)
+import Glibc
+#endif
 
 // MARK: - EditFileTool
 

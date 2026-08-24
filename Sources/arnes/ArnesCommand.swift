@@ -23,7 +23,7 @@ struct Arnes: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "arnes",
     abstract: "Arnes — a model-adaptive agent harness for OpenRouter.",
-    subcommands: [Interactive.self, Chat.self, Do.self, Models.self, Status.self, Runs.self, Sessions.self],
+    subcommands: [Interactive.self, Chat.self, Do.self, Models.self, Status.self, Runs.self, Sessions.self, Eval.self],
     defaultSubcommand: Interactive.self)
 }
 

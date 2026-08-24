@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(Glibc)
+import Glibc
+#endif
 
 /// Minimal raw-mode line editor: arrow-key history, left/right cursor movement,
 /// backspace, Ctrl-C (clear line; twice on empty = exit), Ctrl-D on empty = exit.
@@ -40,7 +43,7 @@ final class LineReader {
     var original = termios()
     tcgetattr(STDIN_FILENO, &original)
     var raw = original
-    raw.c_lflag &= ~UInt(ICANON | ECHO | ISIG)
+    raw.c_lflag &= ~tcflag_t(ICANON | ECHO | ISIG)
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw)
     defer {
       var restore = original
