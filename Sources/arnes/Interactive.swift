@@ -8,7 +8,15 @@ import OpenRouterSwift
 /// Interactive y/n/a gate for mutating tools. `allowAlwaysThisSession` is remembered
 /// by the `Session`, so each tool prompts at most once after an `a`.
 struct TerminalPermissions: PermissionDelegate {
+  /// Stopped before prompting so an animating wait line can't clobber the question.
+  let spinner: Spinner?
+
+  init(spinner: Spinner? = nil) {
+    self.spinner = spinner
+  }
+
   func decide(toolName: String, summary: String, argumentsJSON: String) async -> PermissionDecision {
+    spinner?.stop()
     print("\n" + ANSI.yellow("⚠ \(summary)"))
     print("  allow? [y]es · [n]o · [a]lways this session: ", terminator: "")
     fflush(stdout)
@@ -92,7 +100,10 @@ struct Interactive: AsyncParsableCommand {
   func run() async throws {
     let service = try makeService()
     let sessionStore = SessionStore()
-    let permissions: any PermissionDelegate = safe ? DenyMutationsPermissions() : TerminalPermissions()
+    let spinner = Spinner()
+    let permissions: any PermissionDelegate = safe
+      ? DenyMutationsPermissions()
+      : TerminalPermissions(spinner: spinner)
     let fallbacks = fallback.split(separator: ",").map(String.init)
 
     let session: Session
@@ -128,7 +139,7 @@ struct Interactive: AsyncParsableCommand {
 
     if let prompt {
       print("› \(prompt)")
-      await runTurn(prompt, session: session, renderer: renderer, interrupts: interrupts)
+      await runTurn(prompt, session: session, renderer: renderer, interrupts: interrupts, spinner: spinner)
     }
 
     while true {
@@ -136,10 +147,10 @@ struct Interactive: AsyncParsableCommand {
       let text = line.trimmingCharacters(in: .whitespaces)
       if text.isEmpty { continue }
       if let command = SlashCommand.parse(text) {
-        if await handle(command, session: session) { break }
+        if await handle(command, session: session, spinner: spinner) { break }
         continue
       }
-      await runTurn(text, session: session, renderer: renderer, interrupts: interrupts)
+      await runTurn(text, session: session, renderer: renderer, interrupts: interrupts, spinner: spinner)
     }
     print(ANSI.dim("session \(session.id.prefix(8))… · total \(Renderer.usd(await session.costUSD))"))
   }
@@ -150,48 +161,80 @@ struct Interactive: AsyncParsableCommand {
     _ text: String,
     session: Session,
     renderer: Renderer,
-    interrupts: InterruptController)
+    interrupts: InterruptController,
+    spinner: Spinner)
     async
   {
     renderer.beginTurn()
     let task = Task {
+      spinner.start("waiting for model")
       do {
         for try await event in await session.send(text) {
+          spinner.stop()
           renderer.render(event)
+          if let label = Self.waitLabel(after: event) {
+            spinner.start(label)
+          }
         }
       } catch {
+        spinner.stop()
         print(ANSI.red("error: \(error)"))
       }
+      spinner.stop()
     }
     interrupts.set(task)
     await task.value
     interrupts.set(nil)
+    spinner.stop()
+  }
+
+  /// What to show while waiting for the next event — nil while text is streaming,
+  /// since a spinner redraw would clobber the open line.
+  private static func waitLabel(after event: AgentEvent) -> String? {
+    switch event {
+    case .textDelta, .reasoningDelta:
+      return nil
+    case .toolCall(let name, _):
+      return "running \(name)"
+    case .toolResult, .toolDenied:
+      return "thinking"
+    default:
+      return "waiting for model"
+    }
   }
 
   // MARK: Slash commands
 
   /// Returns true when the REPL should exit.
-  private func handle(_ command: SlashCommand, session: Session) async -> Bool {
+  private func handle(_ command: SlashCommand, session: Session, spinner: Spinner) async -> Bool {
     switch command {
     case .model(let query):
-      await handleModel(query, session: session)
+      await handleModel(query, session: session, spinner: spinner)
 
     case .cost:
       print("session \(Renderer.usd(await session.costUSD))")
 
     case .verify(let verifier):
+      spinner.start("verifying")
+      defer { spinner.stop() }
       do {
         let (passed, verdict) = try await session.verifyLastTurn(model: verifier ?? "openrouter/auto")
+        spinner.stop()
         print(passed ? ANSI.green("✔ \(verdict)") : ANSI.red("✘ \(verdict)"))
       } catch SessionError.nothingToVerify {
+        spinner.stop()
         print(ANSI.dim("nothing to verify yet — send a message first"))
       } catch {
+        spinner.stop()
         print(ANSI.red("verify failed: \(error)"))
       }
 
     case .compact(let summarizer):
+      spinner.start("compacting")
+      defer { spinner.stop() }
       do {
         let result = try await session.compact(with: summarizer)
+        spinner.stop()
         if result.summarizedMessages == 0 {
           print(ANSI.dim("nothing to compact yet — only the current turn is in context"))
         } else {
@@ -200,6 +243,7 @@ struct Interactive: AsyncParsableCommand {
               + "\(result.keptMessages) kept · cost \(Renderer.usd(result.costUSD))"))
         }
       } catch {
+        spinner.stop()
         print(ANSI.red("compact failed: \(error)"))
       }
 
@@ -237,13 +281,16 @@ struct Interactive: AsyncParsableCommand {
     return false
   }
 
-  private func handleModel(_ query: String?, session: Session) async {
+  private func handleModel(_ query: String?, session: Session, spinner: Spinner) async {
     guard let query else {
       print("model \(ANSI.bold(await session.model))\n" + ANSI.dim("switch with /model <query>, e.g. /model sonnet"))
       return
     }
+    spinner.start("searching models")
+    defer { spinner.stop() }
     do {
       let results = try await session.searchModels(query, limit: 8)
+      spinner.stop()
       guard let best = results.first else {
         print(ANSI.dim("no models match \"\(query)\" — try `arnes models \(query)`"))
         return
@@ -270,6 +317,7 @@ struct Interactive: AsyncParsableCommand {
         print(ANSI.dim("narrow the query or use the full slug"))
       }
     } catch {
+      spinner.stop()
       print(ANSI.red("model search failed: \(error)"))
     }
   }
