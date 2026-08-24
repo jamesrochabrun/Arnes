@@ -21,37 +21,53 @@ arnes --help
 (The script removes the old binary and ad-hoc re-signs the new one — overwriting a signed
 binary in place gets it SIGKILLed on Apple Silicon.)
 
-## Use
+## Interactive mode
+
+`arnes` with no subcommand opens the REPL — the primary way to live in the tool:
 
 ```bash
-# interactive session (the default): converse, steer, follow up
-arnes
+arnes                                   # router picks the model (openrouter/auto)
+arnes -m anthropic/claude-haiku-4.5     # pick one up front
+arnes -m openrouter/auto --fallback deepseek/deepseek-v4-flash   # reliability chain
+arnes --safe                            # read-only: every mutating tool is denied
+arnes --continue                        # resume the most recent session
+arnes --resume <id>                     # resume a specific one (ids from `arnes sessions`)
+
 › refactor Sources/App/Router.swift to use async/await
-# streams the answer; asks y/n/always before bash / write_file / edit_file;
+# streams the answer (reasoning dimmed, when the model emits it);
+# asks before each mutating tool (bash / write_file / edit_file):
+#   y = allow once · a = always allow this tool this session · n = deny (the model is told)
+# read-only tools (read_file / grep / glob) run freely; Ctrl-C interrupts the turn safely;
 # every turn ends with a status line:
-# ─ openrouter/auto → deepseek/deepseek-v4-flash · 3 steps · 2 tools · turn $0.0004 · session $0.0021
+# ─ openrouter/auto → deepseek/deepseek-v4-flash · 3 steps · 2 tools · turn $0.0004 · session $0.0021 · ctx 12%
 ```
 
-Inside the REPL:
+Slash commands inside the REPL:
 
 ```text
 /model sonnet     switch the WHOLE conversation to another model, mid-session —
                   history is client-side, so 20 turns into Claude you can finish on GPT
+                  (fuzzy search: "son5", "4o", "flash" all resolve; even across dialects —
+                  anthropic→openai swaps the wire format under the same conversation)
 /cost             running session total (live usage.cost)
-/verify           loop-1: a second model judges whether the last task was completed
-/compact          summarize older turns to free context (also automatic at ~80% full;
+/verify [model]   loop-1: a second model judges whether the last task was completed
+/compact [model]  summarize older turns to free context (also automatic at ~80% full;
                   the status line shows live usage: · ctx 34%)
 /save demo        name the session; resume later with `arnes --resume <id>`
-/clear /status /help /exit
+/status           key limits + credit balance
+/clear            wipe history (keeps the session)
+/help /exit       (/quit and /q also exit)
 ```
 
-Sessions persist to `~/.arnes/sessions/` as they happen (crash-safe):
+Sessions persist to `~/.arnes/sessions/` as every message lands (crash-safe), and the REPL
+also works piped — no TTY needed, so scripts and agents can drive it:
 
 ```bash
-arnes --continue        # resume the most recent session
-arnes --resume <id>     # resume a specific one
-arnes sessions          # list them
+printf 'summarize Sources/ArnesKit/Session.swift\n/cost\n/exit\n' | arnes -m deepseek/deepseek-v4-flash
 ```
+
+(For piped runs that must *mutate* files, prefer headless `arnes do` below — it skips the
+interactive permission prompts.)
 
 Headless stays first-class:
 
@@ -96,6 +112,17 @@ truth — so adding your own suite is trivial. For the industry benchmark,
 `benchmarks/terminal-bench/` has a [Harbor](https://www.harborframework.com) adapter to run
 Arnes on [Terminal-Bench](https://www.tbench.ai) — the same harness used to score Claude
 Code and Codex CLI — with `ARNES_MODEL` selecting the model per run.
+
+## Driving Arnes from an agent
+
+The repo ships a Claude Code skill at [`.claude/skills/arnes/`](.claude/skills/arnes/SKILL.md)
+that teaches an agent the whole CLI surface — "arnes run evals", "panel this task",
+"probe a model" — including cost-conscious model defaults and how to read the scoreboards.
+It loads automatically for sessions inside this repo; to use it from anywhere:
+
+```bash
+ln -s "$(pwd)/.claude/skills/arnes" ~/.claude/skills/arnes
+```
 
 ## What's inside
 

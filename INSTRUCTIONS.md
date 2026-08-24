@@ -64,6 +64,13 @@ Sources/arnes/             # the CLI
   ANSI.swift               # styling, TTY-gated
 ```
 
+## Agent-facing usage
+
+`.claude/skills/arnes/SKILL.md` teaches agents to drive the installed CLI (evals, panels,
+probes, headless `do`, scoreboards) with cost-conscious defaults. **When a CLI flag,
+subcommand, or output format changes, update the skill in the same commit** — it is the
+contract agents rely on. Users symlink it to `~/.claude/skills/arnes` for global use.
+
 ## Working on it
 
 - `swift test` — unit tests, no network. Agent/Session tests inject `MockOpenRouterService`
