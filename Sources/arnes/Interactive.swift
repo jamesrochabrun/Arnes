@@ -258,7 +258,7 @@ struct Interactive: AsyncParsableCommand {
       let resolved = name ?? "session-\(formatter.string(from: Date()))"
       do {
         try await session.save(name: resolved)
-        print("saved as \(ANSI.bold(resolved)) — resume with: arnes --resume \(session.id)")
+        print("saved as \(ANSI.bold(resolved)) — resume with: arnes resume \(resolved)")
       } catch {
         print(ANSI.red("save failed: \(error)"))
       }

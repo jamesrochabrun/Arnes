@@ -13,6 +13,7 @@ let package = Package(
   dependencies: [
     .package(url: "https://github.com/jamesrochabrun/OpenRouterSwift", from: "0.1.0"),
     .package(url: "https://github.com/apple/swift-argument-parser", from: "1.3.0"),
+    .package(url: "https://github.com/JohnSundell/Splash", from: "0.16.0"),
   ],
   targets: [
     .target(
@@ -28,8 +29,12 @@ let package = Package(
       dependencies: [
         "ArnesKit",
         .product(name: "ArgumentParser", package: "swift-argument-parser"),
+        .product(name: "Splash", package: "Splash"),
       ]),
     .testTarget(
       name: "ArnesKitTests",
       dependencies: ["ArnesKit"]),
+    .testTarget(
+      name: "ArnesCLITests",
+      dependencies: ["arnes"]),
   ])

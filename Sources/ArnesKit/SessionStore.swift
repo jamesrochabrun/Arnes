@@ -138,6 +138,22 @@ public struct SessionMeta: Sendable {
   public let model: String?
   public let updatedAt: Date
   public let messageCount: Int
+
+  public init(
+    id: String,
+    createdAt: Date? = nil,
+    name: String? = nil,
+    model: String? = nil,
+    updatedAt: Date,
+    messageCount: Int)
+  {
+    self.id = id
+    self.createdAt = createdAt
+    self.name = name
+    self.model = model
+    self.updatedAt = updatedAt
+    self.messageCount = messageCount
+  }
 }
 
 /// A fully replayed session, ready to hand to `Session(resuming:)`.

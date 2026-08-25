@@ -30,7 +30,7 @@ struct Arnes: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "arnes",
     abstract: "Arnes — a model-adaptive agent harness for OpenRouter.",
-    subcommands: [Interactive.self, Chat.self, Do.self, Models.self, Status.self, Runs.self, Sessions.self, Eval.self, Evals.self, Probe.self],
+    subcommands: [Interactive.self, Chat.self, Do.self, Resume.self, Models.self, Status.self, Runs.self, Sessions.self, Eval.self, Evals.self, Probe.self],
     defaultSubcommand: Interactive.self)
 }
 
@@ -198,6 +198,46 @@ struct Do: AsyncParsableCommand {
   }
 }
 
+// MARK: - resume
+
+struct Resume: AsyncParsableCommand {
+  static let configuration = CommandConfiguration(
+    abstract: "Resume a saved session by id, unique id prefix, or name (most recent when omitted).")
+
+  @Argument(help: "Session id, unique id prefix, or saved name (see `arnes sessions`).")
+  var session: String?
+
+  func run() async throws {
+    let sessions = try SessionStore().list()
+    guard !sessions.isEmpty else {
+      throw ValidationError("no sessions yet — start one with `arnes`.")
+    }
+    let resolved = try Self.resolve(session, in: sessions)
+    let interactive = try Interactive.parse(["--resume", resolved.id])
+    try await interactive.run()
+  }
+
+  /// Exact id wins; otherwise a unique id prefix or saved name (case-insensitive).
+  /// `sessions` is most-recent-first, so a nil query resumes the latest.
+  static func resolve(_ query: String?, in sessions: [SessionMeta]) throws -> SessionMeta {
+    guard let query else { return sessions[0] }
+    if let exact = sessions.first(where: { $0.id == query }) { return exact }
+    let lowered = query.lowercased()
+    let matches = sessions.filter {
+      $0.id.lowercased().hasPrefix(lowered) || $0.name?.lowercased() == lowered
+    }
+    switch matches.count {
+    case 1:
+      return matches[0]
+    case 0:
+      throw ValidationError("no session matches \"\(query)\" — see `arnes sessions`.")
+    default:
+      let listing = matches.map { "  \($0.id)  \($0.name ?? "(unnamed)")" }.joined(separator: "\n")
+      throw ValidationError("\"\(query)\" matches several sessions:\n\(listing)")
+    }
+  }
+}
+
 // MARK: - models
 
 struct Models: AsyncParsableCommand {
@@ -251,7 +291,7 @@ struct Status: AsyncParsableCommand {
 
 struct Sessions: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
-    abstract: "List saved interactive sessions (resume with `arnes --resume <id>`).")
+    abstract: "List saved interactive sessions (resume with `arnes resume <id>`).")
 
   func run() throws {
     let sessions = try SessionStore().list()

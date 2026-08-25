@@ -1,17 +1,19 @@
 import ArnesKit
 import Foundation
 
-/// Renders `AgentEvent`s to the terminal: streamed text raw, tool activity dimmed,
-/// routing in cyan, and a cost/route status line after each turn.
+/// Renders `AgentEvent`s to the terminal: streamed text markdown-styled, tool activity
+/// dimmed, routing in cyan, and a cost/route status line after each turn.
 final class Renderer {
   /// Whether any text deltas were printed for the current step (so the duplicate
   /// `assistantText` can be skipped and we just terminate the line).
   private var printedDelta = false
   private var printedReasoning = false
+  private var markdown = StreamingMarkdown()
 
   func beginTurn() {
     printedDelta = false
     printedReasoning = false
+    markdown = StreamingMarkdown()
   }
 
   func render(_ event: AgentEvent) {
@@ -23,7 +25,7 @@ final class Renderer {
         printedReasoning = false
       }
       printedDelta = true
-      print(delta, terminator: "")
+      print(markdown.feed(delta), terminator: "")
       fflush(stdout)
 
     case .reasoningDelta(let delta):
@@ -33,9 +35,11 @@ final class Renderer {
 
     case .assistantText(let text):
       if printedDelta {
-        print() // the streamed deltas already showed the text; end the line
+        // The streamed deltas already showed the text; emit what's still buffered
+        // (a partial line, open styles) and end the line.
+        print(markdown.flush())
       } else {
-        print(text)
+        print(markdown.feed(text) + markdown.flush())
       }
       printedDelta = false
 
@@ -86,7 +90,7 @@ final class Renderer {
 
   private func endStreamedLineIfNeeded() {
     if printedDelta || printedReasoning {
-      print()
+      print(markdown.flush())
       printedDelta = false
       printedReasoning = false
     }

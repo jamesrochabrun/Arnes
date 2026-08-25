@@ -56,10 +56,11 @@ Sources/ArnesKit/
   ResponsesDialect.swift   # /responses native path: chat history → OpenAI shapes + stream accumulator
   DialectVerdict.swift     # conformance verdicts → ~/.arnes/dialects.jsonl; auto pins broken natives to chat
 Sources/arnes/             # the CLI
-  ArnesCommand.swift       # root: interactive (default) · chat · do · models · status · runs · sessions
+  ArnesCommand.swift       # root: interactive (default) · chat · do · resume · models · status · runs · sessions
   Interactive.swift        # REPL: turns, slash commands, SIGINT→cancel, TerminalPermissions
   LineReader.swift         # raw-mode line editor + history (readLine() fallback when piped)
   Renderer.swift           # AgentEvent → terminal; cost/route status line per turn
+  Markdown.swift           # StreamingMarkdown: delta stream → styled prose/headings/bullets + fenced code with Splash highlighting
   SlashCommand.swift       # /model /cost /verify /save /clear /status /help /exit
   ANSI.swift               # styling, TTY-gated
 ```
@@ -122,6 +123,10 @@ contract agents rely on. Users symlink it to `~/.claude/skills/arnes` for global
       dropped; `--split` auto-slices a session into one task per user turn with rolling
       context so follow-ups stay self-contained, writer may SKIP non-task turns),
       `arnes evals prune` (--older-than/--suite/--model/--all, atomic rewrite)
+- [x] REPL polish — `arnes resume [id|id-prefix|name]` subcommand (most recent when omitted,
+      ambiguous prefixes listed), and markdown-styled streaming output: headings/bullets/
+      quotes/inline styles rendered as they stream, fenced code in a gutter box with
+      Swift highlighted via Splash (`StreamingMarkdown`, TTY-gated — piped output stays raw)
 - [ ] Cached model profiles (manifest still fetched per process)
 - [ ] Panel policy triggers (e.g. auto-panel after verifier rejections); `subtask` tool (nested Session)
 - [ ] MCP tool provider (`~/.arnes/mcp.json`)

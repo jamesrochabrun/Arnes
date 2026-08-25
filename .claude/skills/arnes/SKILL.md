@@ -109,8 +109,12 @@ arnes evals prune --older-than 30            # delete old rows (also --suite, --
 arnes runs                             # per-model runs, cost, verifier pass rate
 arnes models "flash" --supports tools  # search the live manifest (pricing, context)
 arnes status                           # key limits + credit balance
+arnes sessions                         # saved interactive sessions (ids for evals capture)
 tail ~/.arnes/evals.jsonl              # raw eval rows (JSONL) for custom analysis
 ```
+
+`arnes resume [id|id-prefix|name]` reopens a saved session interactively (most recent when
+omitted) — it starts a TTY REPL, so it's for the user to run, not for agents.
 
 ## Adding an eval task
 
