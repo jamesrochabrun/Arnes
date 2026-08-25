@@ -84,6 +84,46 @@ final class EvalCaptureTests: XCTestCase {
     XCTAssertNil(output.task.timeoutSeconds)
   }
 
+  // MARK: Split
+
+  func testSplitSourcesSliceByUserTurnWithRollingContext() {
+    let messages: [Message] = [
+      .user("create colors.txt with red green blue"),
+      Message(role: .assistant, content: nil, toolCalls: [
+        ToolCall(id: "c1", type: "function", index: 0,
+                 function: .init(name: "write_file", arguments: #"{"path":"colors.txt"}"#)),
+      ]),
+      .tool("wrote 15 bytes", toolCallId: "c1"),
+      .assistant("created colors.txt"),
+      .user("now count its lines into count.txt"),
+      .assistant("done, count.txt has 3"),
+    ]
+    let sources = EvalCapture.splitSources(messages)
+    XCTAssertEqual(sources.count, 2)
+    // First turn: no context preamble, full transcript including the tool call.
+    XCTAssertFalse(sources[0].contains("Earlier in the session"))
+    XCTAssertTrue(sources[0].contains("write_file"))
+    // Second turn: carries the earlier request as context so "its lines" resolves.
+    XCTAssertTrue(sources[1].contains("Earlier in the session"))
+    XCTAssertTrue(sources[1].contains("create colors.txt"))
+    XCTAssertTrue(sources[1].contains("now count its lines"))
+    // But not the first turn's tool plumbing — context is a summary, not a replay.
+    XCTAssertFalse(sources[1].contains("write_file"))
+  }
+
+  func testDistillIfTaskReturnsNilOnSkipWithoutRetry() async throws {
+    let mock = MockOpenRouterService()
+    mock.chatResponses = [Fixtures.textResponse("SKIP", cost: 0.0002)]
+    let distiller = EvalTaskDistiller(service: mock)
+
+    let output = try await distiller.distillIfTask(from: "user: /cost", model: "test/writer")
+
+    XCTAssertNil(output)
+    XCTAssertEqual(mock.requests.count, 1)
+    // The skip instruction only rides in split mode.
+    XCTAssertTrue(mock.requests[0].messages.first?.content?.plainText.contains("SKIP") == true)
+  }
+
   // MARK: Transcript rendering
 
   func testRenderTranscriptShowsRolesToolCallsAndOutputs() {

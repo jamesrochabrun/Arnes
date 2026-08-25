@@ -35,6 +35,52 @@ public enum EvalCapture {
     return lines.joined(separator: "\n\n")
   }
 
+  /// Slices a transcript into per-turn sources for `capture --split`: one source per
+  /// user turn (the user message through everything before the next user message),
+  /// prefixed with a brief summary of earlier turns so follow-ups like "now add
+  /// persistence" stay self-contained.
+  public static func splitSources(_ messages: [Message]) -> [String] {
+    var sources: [String] = []
+    var context: [String] = []
+    for turn in turns(messages) {
+      var source = ""
+      if !context.isEmpty {
+        source += "Earlier in the session (summary):\n" + context.joined(separator: "\n") + "\n\n"
+      }
+      source += "Current turn transcript:\n" + renderTranscript(turn)
+      sources.append(source)
+      // Summarize this turn for the ones after it: the request and the final reply.
+      if let user = turn.first(where: { $0.role == .user })?.content?.plainText {
+        context.append("user: \(String(user.prefix(300)))")
+      }
+      if let reply = turn.last(where: { $0.role == .assistant })?.content?.plainText, !reply.isEmpty {
+        context.append("assistant: \(String(reply.prefix(300)))")
+      }
+    }
+    return sources
+  }
+
+  /// Groups a chat-shaped history into user turns; anything before the first user
+  /// message is dropped.
+  static func turns(_ messages: [Message]) -> [[Message]] {
+    var result: [[Message]] = []
+    var current: [Message] = []
+    for message in messages {
+      if message.role == .user {
+        if !current.isEmpty {
+          result.append(current)
+        }
+        current = [message]
+      } else if !current.isEmpty {
+        current.append(message)
+      }
+    }
+    if !current.isEmpty {
+      result.append(current)
+    }
+    return result
+  }
+
   /// Dry-runs the task's plumbing in a fresh temp directory. Returns nil when the
   /// task is a real test, or the reason it isn't:
   /// - the setup script must succeed, and
@@ -91,18 +137,48 @@ public final class EvalTaskDistiller: @unchecked Sendable {
     model: String = "openrouter/auto")
     async throws -> Output
   {
+    guard let output = try await run(source: source, hint: hint, model: model, allowSkip: false) else {
+      throw EvalCaptureError.distillationFailed("writer skipped a non-skippable source")
+    }
+    return output
+  }
+
+  /// Split-mode distillation: returns nil when the writer judges the turn contains no
+  /// distillable task (a question, chit-chat, a meta command).
+  public func distillIfTask(
+    from source: String,
+    hint: String? = nil,
+    model: String = "openrouter/auto")
+    async throws -> Output?
+  {
+    try await run(source: source, hint: hint, model: model, allowSkip: true)
+  }
+
+  private func run(
+    source: String,
+    hint: String?,
+    model: String,
+    allowSkip: Bool)
+    async throws -> Output?
+  {
     var feedback: String?
     var cost = 0.0
     for attempt in 1...2 {
+      let system = allowSkip ? Self.writerPrompt + " " + Self.skipInstruction : Self.writerPrompt
       let response = try await service.chatCompletion(
         ChatCompletionRequest(
           model: model,
           messages: [
-            .system(Self.writerPrompt),
+            .system(system),
             .user(Self.userText(source: source, hint: hint, feedback: feedback)),
           ]))
       cost += response.usage?.cost ?? 0
       let reply = response.choices.first?.message.content ?? ""
+      if allowSkip,
+         reply.trimmingCharacters(in: .whitespacesAndNewlines).uppercased().hasPrefix("SKIP")
+      {
+        return nil
+      }
       guard var task = Self.parseTask(reply) else {
         feedback = "Your reply was not a single valid JSON object matching the schema. Reply with only the JSON."
         continue
@@ -138,11 +214,19 @@ public final class EvalTaskDistiller: @unchecked Sendable {
     "timeoutSeconds": only if the task genuinely needs more than 300}
     Rules: everything runs in an empty temp directory with only what setup creates; \
     paths are relative; no network access. The check must be strict and programmatic — \
-    verify actual outcomes (file contents, program output), not effort. The check MUST \
+    verify actual outcomes (file contents, program output), not effort. Assert content, \
+    not incidental formatting: never let a check hinge on a trailing newline, exact \
+    whitespace, or ordering the prompt didn't demand (e.g. prefer `grep -c`/`grep -q` \
+    over `wc -l` for line-content assertions). The check MUST \
     fail on the freshly set-up directory, before any work is done. The prompt must be \
     self-contained (an agent with no other context can act on it). If the transcript \
     shows a failure, capture the task that was fumbled — including the tricky part — \
     not the failure itself. Reply with only the JSON object.
+    """
+
+  private static let skipInstruction = """
+    If the current turn contains no distillable agent task — a question, chit-chat, a \
+    meta command, or discussion with no verifiable outcome — reply with exactly SKIP.
     """
 
   private static func userText(source: String, hint: String?, feedback: String?) -> String {

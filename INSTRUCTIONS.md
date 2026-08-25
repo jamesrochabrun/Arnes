@@ -119,7 +119,9 @@ contract agents rely on. Users symlink it to `~/.claude/skills/arnes` for global
 - [x] Eval lifecycle tooling — `arnes evals` (history bars per suite × model × dialect,
       filters), `arnes evals capture` (writer model distills a session or description into
       a validated `EvalTask` — setup must succeed, check must fail pre-work, silly timeouts
-      dropped), `arnes evals prune` (--older-than/--suite/--model/--all, atomic rewrite)
+      dropped; `--split` auto-slices a session into one task per user turn with rolling
+      context so follow-ups stay self-contained, writer may SKIP non-task turns),
+      `arnes evals prune` (--older-than/--suite/--model/--all, atomic rewrite)
 - [ ] Cached model profiles (manifest still fetched per process)
 - [ ] Panel policy triggers (e.g. auto-panel after verifier rejections); `subtask` tool (nested Session)
 - [ ] MCP tool provider (`~/.arnes/mcp.json`)

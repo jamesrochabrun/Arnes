@@ -115,6 +115,8 @@ truth — so adding your own suite is trivial. You don't even have to write task
 arnes evals capture                          # from the most recent session
 arnes evals capture --session <id> --hint "focus on the regex it got wrong"
 arnes evals capture --task "find the max in numbers.txt and append max=<n> in place"
+arnes evals capture --split                  # auto-slice: one task per user turn, chit-chat
+                                             # skipped, follow-up turns made self-contained
 # ✔ captured append-max-to-file → evals/captured/append-max-to-file.json
 #   (validated: setup succeeds, check FAILS pre-work — a check that already passes tests nothing)
 arnes eval evals/captured -m deepseek/deepseek-v4-flash    # rerun it forever

@@ -78,10 +78,17 @@ When the user says the agent fumbled something and wants it as a reusable test:
 
 ```bash
 arnes evals capture                                   # distill the most recent session
+arnes evals capture --split                           # auto-slice: one task per user turn,
+                                                      # non-tasks skipped, follow-ups self-contained
 arnes evals capture --session <id> --hint "focus on the part it got wrong"
 arnes evals capture --task "<plain description>"      # no session needed
 arnes evals capture -o evals/mine -m anthropic/claude-haiku-4.5   # output dir + writer model
 ```
+
+Use `--split` when the user wants a whole session (or "everything we just did") turned into
+a dataset; use single capture + `--hint` to extract one specific fumble. After capturing,
+show the user each task's `check` — captured checks deserve a quick human review before
+they become the bar other models are judged against.
 
 A writer model drafts `{id, prompt, setup, check}`; the draft is auto-validated (setup must
 succeed, check must FAIL pre-work) and written to the output dir (default `evals/captured/`).
