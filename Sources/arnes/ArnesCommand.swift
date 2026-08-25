@@ -30,7 +30,7 @@ struct Arnes: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "arnes",
     abstract: "Arnes — a model-adaptive agent harness for OpenRouter.",
-    subcommands: [Interactive.self, Chat.self, Do.self, Resume.self, Models.self, Status.self, Runs.self, Sessions.self, Eval.self, Evals.self, Probe.self],
+    subcommands: [Interactive.self, Chat.self, Do.self, Resume.self, Models.self, Status.self, Runs.self, Sessions.self, Eval.self, Evals.self, Probe.self, Mcp.self],
     defaultSubcommand: Interactive.self)
 }
 
@@ -106,14 +106,21 @@ struct Do: AsyncParsableCommand {
   @Flag(help: "With --panel: keep the winner in its snapshot instead of applying its changes here.")
   var noApply = false
 
+  @Flag(help: "Skip connecting MCP servers from ~/.arnes/mcp.json.")
+  var noMcp = false
+
   func run() async throws {
     let service = try makeService()
     if panel != nil {
       try await runPanel(service: service)
       return
     }
+    // Panels stay MCP-free: candidates run in isolated snapshots, and shared server
+    // processes would let them trample each other through side effects.
+    let mcp = await MCPSetup.connect(enabled: !noMcp)
     let agent = Agent(
       service: service,
+      tools: Session.defaultTools + mcp.tools,
       permissions: safe ? DenyMutationsPermissions() : AutoApprovePermissions())
     let result = try await agent.run(
       task: task,
@@ -143,6 +150,9 @@ struct Do: AsyncParsableCommand {
           break // headless output prints whole messages and its own footer
         }
       })
+    // On a thrown run the process exits and the servers see stdin EOF, which is the
+    // stdio-transport shutdown signal — only the success path needs an explicit close.
+    await mcp.provider.shutdown()
     let record = result.record
     let routed = record.routedModels.joined(separator: ", ")
     print("\n[requested \(record.model) → served by \(routed.isEmpty ? "?" : routed) · dialect \(record.dialect) · \(record.steps) steps · \(record.toolCalls) tool calls · $\(String(format: "%.4f", record.costUSD))]")

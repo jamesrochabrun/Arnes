@@ -62,6 +62,23 @@ arnes do "make the greeting configurable" --panel 3 \
 - One model in `-m` + `--panel N` = N samples of that model. Costs ≈ N × a single run.
 - Every candidate lands in `~/.arnes/evals.jsonl` labeled won/lost (suite "panel").
 
+## MCP tools — "hook up an MCP server"
+
+```bash
+arnes mcp                      # connect servers from ~/.arnes/mcp.json, list their tools
+arnes do "..." --no-mcp        # run without MCP servers
+ARNES_MCP_CONFIG=./mcp.json arnes do "..."   # per-project config override
+```
+
+- Config is the Claude Desktop `mcpServers` shape (stdio servers: `command`, `args`, `env`)
+  at `~/.arnes/mcp.json` — existing Claude configs can be copied verbatim. No config file
+  means MCP is simply off.
+- When configured, `arnes` (REPL) and `arnes do` connect the servers automatically and the
+  model sees their tools as `mcp__<server>__<tool>`. MCP tools are permission-gated like
+  `bash` unless the server marks them read-only, so `--safe` denies them and the REPL
+  prompts. Panels never load MCP tools (parallel candidates would share server side
+  effects). `arnes mcp` needs no API key — use it to debug a server config.
+
 ## Conformance probe — "probe a model"
 
 ```bash

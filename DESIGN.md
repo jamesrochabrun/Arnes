@@ -101,6 +101,10 @@ all three dialects already wrapped there). ArnesKit stays UI-free so native apps
     (`parentSessionId`), fresh history, inherited permission delegate + allowlist.
   - *Dialect-native execution* for Anthropic (`/messages`) and OpenAI (`/responses`) under
     `Session`; conformance probe; `--panel N` with worktree isolation; policy triggers.
-- **v0.4:** MCP tool provider (`MCPToolProvider` bridging MCP servers into `[any AgentTool]`,
-  config at `~/.arnes/mcp.json`, `.mutating` by default); scoreboard-driven routing defaults;
-  pack-improvement proposals with A/B evals; provider/ZDR/budget policy files.
+  - *MCP tool provider (shipped):* `MCPToolProvider` bridges stdio MCP servers into
+    `[any AgentTool]` — config at `~/.arnes/mcp.json` (Claude Desktop `mcpServers` shape,
+    `ARNES_MCP_CONFIG` override), tools namespaced `mcp__<server>__<tool>` with schemas
+    passed through, `.mutating` (gated) unless the server annotates `readOnlyHint`.
+    `arnes mcp` inspects; `--no-mcp` opts out per run; panels stay MCP-free.
+- **v0.4:** scoreboard-driven routing defaults; pack-improvement proposals with A/B evals;
+  provider/ZDR/budget policy files.

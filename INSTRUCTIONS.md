@@ -55,8 +55,10 @@ Sources/ArnesKit/
   MessagesDialect.swift    # /messages native path: chat history → Anthropic shapes + stream accumulator
   ResponsesDialect.swift   # /responses native path: chat history → OpenAI shapes + stream accumulator
   DialectVerdict.swift     # conformance verdicts → ~/.arnes/dialects.jsonl; auto pins broken natives to chat
+  MCP.swift                # MCP tool provider: ~/.arnes/mcp.json → stdio JSON-RPC clients → [any AgentTool]
 Sources/arnes/             # the CLI
   ArnesCommand.swift       # root: interactive (default) · chat · do · resume · models · status · runs · sessions
+  McpCommand.swift         # `arnes mcp` (list servers + tools) + shared CLI MCP bootstrap
   Interactive.swift        # REPL: turns, slash commands, SIGINT→cancel, TerminalPermissions
   LineReader.swift         # raw-mode line editor + history (readLine() fallback when piped)
   Renderer.swift           # AgentEvent → terminal; cost/route status line per turn
@@ -129,5 +131,10 @@ contract agents rely on. Users symlink it to `~/.claude/skills/arnes` for global
       Swift highlighted via Splash (`StreamingMarkdown`, TTY-gated — piped output stays raw)
 - [ ] Cached model profiles (manifest still fetched per process)
 - [ ] Panel policy triggers (e.g. auto-panel after verifier rejections); `subtask` tool (nested Session)
-- [ ] MCP tool provider (`~/.arnes/mcp.json`)
+- [x] MCP tool provider — `~/.arnes/mcp.json` (Claude Desktop `mcpServers` shape, stdio
+      transport, `ARNES_MCP_CONFIG` per-project override) bridges server tools into the
+      loop as `mcp__<server>__<tool>`, schemas passed through untouched; `.mutating`
+      (permission-gated) unless the server annotates `readOnlyHint`; `arnes mcp` lists
+      servers + tools, `--no-mcp` on `interactive`/`do` skips connecting; panels stay
+      MCP-free (candidates would share server side effects)
 - [ ] Scoreboard-driven routing defaults; gated pack proposals

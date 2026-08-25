@@ -102,6 +102,9 @@ struct Interactive: AsyncParsableCommand {
   @Flag(help: "Deny all mutating tools instead of prompting.")
   var safe = false
 
+  @Flag(help: "Skip connecting MCP servers from ~/.arnes/mcp.json.")
+  var noMcp = false
+
   func run() async throws {
     let service = try makeService()
     let sessionStore = SessionStore()
@@ -110,12 +113,16 @@ struct Interactive: AsyncParsableCommand {
       ? DenyMutationsPermissions()
       : TerminalPermissions(spinner: spinner)
     let fallbacks = fallback.split(separator: ",").map(String.init)
+    let requested = try loadSessionIfRequested(store: sessionStore)
+    let mcp = await MCPSetup.connect(enabled: !noMcp, spinner: spinner)
+    let tools = Session.defaultTools + mcp.tools
 
     let session: Session
-    if let loaded = try loadSessionIfRequested(store: sessionStore) {
+    if let loaded = requested {
       session = Session(
         resuming: loaded,
         service: service,
+        tools: tools,
         permissions: permissions,
         sessionStore: sessionStore,
         configuration: Session.Configuration(model: loaded.model, fallbackModels: fallbacks))
@@ -124,6 +131,7 @@ struct Interactive: AsyncParsableCommand {
     } else {
       session = Session(
         service: service,
+        tools: tools,
         permissions: permissions,
         sessionStore: sessionStore,
         configuration: Session.Configuration(model: model, fallbackModels: fallbacks))
@@ -157,6 +165,7 @@ struct Interactive: AsyncParsableCommand {
       }
       await runTurn(text, session: session, renderer: renderer, interrupts: interrupts, spinner: spinner)
     }
+    await mcp.provider.shutdown()
     print(ANSI.dim("session \(session.id.prefix(8))… · total \(Renderer.usd(await session.costUSD))"))
   }
 

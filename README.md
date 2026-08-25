@@ -177,5 +177,6 @@ v0.3 — dialect-native execution (`/messages`, `/responses`, per-model auto + `
 bash checks as ground truth), CI (macOS + Linux) with static Linux release binaries and a
 Terminal-Bench/Harbor adapter, on top of v0.2's interactive REPL (permission gating,
 mid-session `/model` swap, persistence + resume, coding tools, context compaction) and the
-v0.1 loop (inline verification, run records). Next: conformance probe, subagents, MCP.
+v0.1 loop (inline verification, run records). MCP servers from `~/.arnes/mcp.json` plug
+their tools into the loop (`arnes mcp` to inspect). Next: subagents, cached model profiles.
 Roadmap in [DESIGN.md](DESIGN.md).
