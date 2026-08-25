@@ -30,6 +30,7 @@ arnes                                   # router picks the model (openrouter/aut
 arnes -m anthropic/claude-haiku-4.5     # pick one up front
 arnes -m openrouter/auto --fallback deepseek/deepseek-v4-flash   # reliability chain
 arnes --safe                            # read-only: every mutating tool is denied
+arnes --no-mcp                          # skip connecting MCP servers (see "MCP servers" below)
 arnes --continue                        # resume the most recent session
 arnes --resume <id>                     # resume a specific one (ids from `arnes sessions`)
 
@@ -136,6 +137,39 @@ arnes evals prune --all
 Arnes on [Terminal-Bench](https://www.tbench.ai) — the same harness used to score Claude
 Code and Codex CLI — with `ARNES_MODEL` selecting the model per run.
 
+## MCP servers
+
+Drop a config at `~/.arnes/mcp.json` — the same `mcpServers` shape Claude Desktop and
+Claude Code use, so an existing config copies verbatim — and every server's tools join the
+loop in both the REPL and `arnes do`:
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+    }
+  }
+}
+```
+
+```bash
+arnes mcp          # connect the configured servers and list their tools (no API key needed)
+# filesystem · 11 tools
+#   mcp__filesystem__read_file   [read-only]   Read the complete contents of a file...
+#   mcp__filesystem__write_file  [mutating]    Create or overwrite a file...
+```
+
+- Tools surface to the model as `mcp__<server>__<tool>`, schemas passed through untouched.
+- MCP tools are **mutating by default** — the REPL prompts y/a/n and `--safe` denies them —
+  unless the server annotates `readOnlyHint`, which lets them run freely like `grep`.
+- No config file simply means MCP is off; `--no-mcp` skips connecting for one run;
+  `ARNES_MCP_CONFIG=./mcp.json` points at a per-project config.
+- Panels never load MCP tools: candidates run in isolated snapshots, and a shared server
+  would leak side effects between them.
+- Stdio servers only for now (arnes launches `command` and speaks JSON-RPC over its pipes).
+
 ## Driving Arnes from an agent
 
 The repo ships a Claude Code skill at [`.claude/skills/arnes/`](.claude/skills/arnes/SKILL.md)
@@ -151,10 +185,11 @@ ln -s "$(pwd)/.claude/skills/arnes" ~/.claude/skills/arnes
 
 - **`ArnesKit`** (embeddable, UI-free): the `Session` actor (streaming agent loop, permission
   gating, interrupts), capability manifest (`ModelCatalog`), per-family prompt packs
-  (user-overridable at `~/.arnes/packs/`), six tools, session transcripts
-  (`~/.arnes/sessions/`), and the `RunRecord` eval substrate (`~/.arnes/runs.jsonl`).
-- **`arnes`** (CLI): `interactive` (default) · `chat` · `do` · `models` · `status` · `runs`
-  · `sessions` · `eval` · `probe`.
+  (user-overridable at `~/.arnes/packs/`), six built-in tools plus any MCP server's
+  (`~/.arnes/mcp.json`), session transcripts (`~/.arnes/sessions/`), and the `RunRecord`
+  eval substrate (`~/.arnes/runs.jsonl`).
+- **`arnes`** (CLI): `interactive` (default) · `chat` · `do` · `resume` · `models` · `status`
+  · `runs` · `sessions` · `eval` · `evals` · `probe` · `mcp`.
 - Built on [OpenRouterSwift](https://github.com/jamesrochabrun/OpenRouterSwift) — usage cost
   tracked per request, model fallbacks on every call.
 - **Routing visibility**: every response reports the model that actually served it
