@@ -119,6 +119,67 @@ public struct EvalStore: Sendable {
       .split(separator: "\n")
       .compactMap { try? decoder.decode(EvalOutcome.self, from: Data($0.utf8)) }
   }
+
+  /// Rewrites the history keeping only matching rows (`arnes evals prune`).
+  /// Atomic: the file is replaced whole, never truncated mid-write.
+  public func rewrite(keeping shouldKeep: (EvalOutcome) -> Bool) throws -> (kept: Int, removed: Int) {
+    let outcomes = try all()
+    let kept = outcomes.filter(shouldKeep)
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    var data = Data()
+    for outcome in kept {
+      data.append(try encoder.encode(outcome))
+      data.append(Data("\n".utf8))
+    }
+    try FileManager.default.createDirectory(
+      at: url.deletingLastPathComponent(),
+      withIntermediateDirectories: true)
+    try data.write(to: url, options: .atomic)
+    return (kept.count, outcomes.count - kept.count)
+  }
+}
+
+// MARK: - EvalHistoryRow
+
+/// Aggregation over the eval history grouped by suite × model × dialect — the shape
+/// `arnes evals` renders. Distinct from `EvalStats` (one invocation, grouped by model).
+public struct EvalHistoryRow: Sendable {
+  public let suite: String
+  public let model: String
+  public let dialect: String?
+  public let trials: Int
+  public let passed: Int
+  public let totalCostUSD: Double
+  public let lastRun: Date
+
+  public var passRate: Double { trials == 0 ? 0 : Double(passed) / Double(trials) }
+
+  public static func aggregate(_ outcomes: [EvalOutcome]) -> [EvalHistoryRow] {
+    struct Key: Hashable {
+      let suite: String
+      let model: String
+      let dialect: String?
+    }
+    let grouped = Dictionary(grouping: outcomes) {
+      Key(suite: $0.suite, model: $0.model, dialect: $0.dialect)
+    }
+    return grouped.map { key, rows in
+      EvalHistoryRow(
+        suite: key.suite,
+        model: key.model,
+        dialect: key.dialect,
+        trials: rows.count,
+        passed: rows.filter(\.checkPassed).count,
+        totalCostUSD: rows.reduce(0) { $0 + $1.costUSD },
+        lastRun: rows.map(\.startedAt).max() ?? Date.distantPast)
+    }
+    .sorted {
+      if $0.suite != $1.suite { return $0.suite < $1.suite }
+      if $0.passRate != $1.passRate { return $0.passRate > $1.passRate }
+      return $0.model < $1.model
+    }
+  }
 }
 
 // MARK: - EvalRunner

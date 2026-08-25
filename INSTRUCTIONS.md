@@ -116,6 +116,10 @@ contract agents rely on. Users symlink it to `~/.claude/skills/arnes` for global
       Verdicts live in ~/.arnes/dialects.jsonl (latest wins, failures expire after 7 days);
       `.auto` consults them, forced `--dialect` ignores them. `arnes probe <model>` checks a
       model explicitly with one echo-tool round-trip.
+- [x] Eval lifecycle tooling — `arnes evals` (history bars per suite × model × dialect,
+      filters), `arnes evals capture` (writer model distills a session or description into
+      a validated `EvalTask` — setup must succeed, check must fail pre-work, silly timeouts
+      dropped), `arnes evals prune` (--older-than/--suite/--model/--all, atomic rewrite)
 - [ ] Cached model profiles (manifest still fetched per process)
 - [ ] Panel policy triggers (e.g. auto-panel after verifier rejections); `subtask` tool (nested Session)
 - [ ] MCP tool provider (`~/.arnes/mcp.json`)

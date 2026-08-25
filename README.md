@@ -108,7 +108,28 @@ arnes do "make the greeting configurable" --panel 3 \
 
 Evals append to `~/.arnes/evals.jsonl` (and feed the `runs` scoreboard). A task is one
 JSON file — prompt + optional bash `setup` + a bash `check` whose exit code is the ground
-truth — so adding your own suite is trivial. For the industry benchmark,
+truth — so adding your own suite is trivial. You don't even have to write tasks by hand:
+
+```bash
+# watched the agent fumble something? distill that session into a reusable test
+arnes evals capture                          # from the most recent session
+arnes evals capture --session <id> --hint "focus on the regex it got wrong"
+arnes evals capture --task "find the max in numbers.txt and append max=<n> in place"
+# ✔ captured append-max-to-file → evals/captured/append-max-to-file.json
+#   (validated: setup succeeds, check FAILS pre-work — a check that already passes tests nothing)
+arnes eval evals/captured -m deepseek/deepseek-v4-flash    # rerun it forever
+
+# see the history, visually — pass-rate bars per suite × model × dialect
+arnes evals
+# basics   anthropic/claude-haiku-4.5   messages  ████████████ 8/8 (100%)  $0.0501  08-24 12:30
+#          openai/gpt-4o-mini           chat      ███████████░ 7/8 (87%)   $0.0033  08-24 12:31
+arnes evals show --suite basics --model haiku --days 7     # filters
+
+# trim the history
+arnes evals prune --older-than 30            # rows older than 30 days
+arnes evals prune --suite panel              # one suite
+arnes evals prune --all
+``` For the industry benchmark,
 `benchmarks/terminal-bench/` has a [Harbor](https://www.harborframework.com) adapter to run
 Arnes on [Terminal-Bench](https://www.tbench.ai) — the same harness used to score Claude
 Code and Codex CLI — with `ARNES_MODEL` selecting the model per run.

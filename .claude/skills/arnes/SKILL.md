@@ -72,6 +72,30 @@ Verdicts live in `~/.arnes/dialects.jsonl`; auto dialect selection reads them (f
 pinned to chat, failures retried after 7 days). Normal runs also record verdicts
 optimistically, so probing is optional — use it to pre-check a model or retest a failure.
 
+## Capture an eval from a fumble — "make an eval from that"
+
+When the user says the agent fumbled something and wants it as a reusable test:
+
+```bash
+arnes evals capture                                   # distill the most recent session
+arnes evals capture --session <id> --hint "focus on the part it got wrong"
+arnes evals capture --task "<plain description>"      # no session needed
+arnes evals capture -o evals/mine -m anthropic/claude-haiku-4.5   # output dir + writer model
+```
+
+A writer model drafts `{id, prompt, setup, check}`; the draft is auto-validated (setup must
+succeed, check must FAIL pre-work) and written to the output dir (default `evals/captured/`).
+Rerun it any time with `arnes eval <dir> -m <model>`. Report the captured task's id, path,
+and check to the user.
+
+## View / prune eval history — "show me the evals"
+
+```bash
+arnes evals                                  # pass-rate bars per suite × model × dialect
+arnes evals show --suite basics --model haiku --days 7
+arnes evals prune --older-than 30            # delete old rows (also --suite, --model, --all)
+```
+
 ## Scoreboards & discovery
 
 ```bash
