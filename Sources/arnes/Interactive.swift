@@ -114,8 +114,9 @@ struct Interactive: AsyncParsableCommand {
       : TerminalPermissions(spinner: spinner)
     let fallbacks = fallback.split(separator: ",").map(String.init)
     let requested = try loadSessionIfRequested(store: sessionStore)
-    let mcp = await MCPSetup.connect(enabled: !noMcp, spinner: spinner)
+    let mcp = await MCPSetup.connect(enabled: !noMcp, spinner: spinner, quiet: true)
     let tools = Session.defaultTools + mcp.tools
+    let mcpServers = Set(mcp.tools.compactMap { ($0 as? MCPTool)?.server }).count
 
     let session: Session
     if let loaded = requested {
@@ -127,7 +128,13 @@ struct Interactive: AsyncParsableCommand {
         sessionStore: sessionStore,
         configuration: Session.Configuration(model: loaded.model, fallbackModels: fallbacks))
       let label = loaded.meta.name ?? loaded.meta.id
-      print(ANSI.dim("resumed \(label) · \(loaded.messages.count) messages · \(loaded.model) · session \(Renderer.usd(loaded.costUSD))"))
+      print(Header.banner(
+        version: arnesVersion,
+        model: loaded.model,
+        dialect: "auto",
+        mcpServers: mcpServers,
+        mcpTools: mcp.tools.count,
+        resumeLine: "resumed \(label) · \(loaded.messages.count) messages · \(Renderer.usd(loaded.costUSD))"))
     } else {
       session = Session(
         service: service,
@@ -135,7 +142,12 @@ struct Interactive: AsyncParsableCommand {
         permissions: permissions,
         sessionStore: sessionStore,
         configuration: Session.Configuration(model: model, fallbackModels: fallbacks))
-      print(ANSI.dim("arnes · \(model) · /help for commands"))
+      print(Header.banner(
+        version: arnesVersion,
+        model: model,
+        dialect: "auto",
+        mcpServers: mcpServers,
+        mcpTools: mcp.tools.count))
     }
 
     // At the prompt, raw mode owns Ctrl-C as a byte; during a turn, this source

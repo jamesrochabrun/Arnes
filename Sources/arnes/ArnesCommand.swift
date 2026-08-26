@@ -3,6 +3,9 @@ import ArnesKit
 import Foundation
 import OpenRouterSwift
 
+/// Single source of truth for the CLI version — shown in the header and `--version`.
+let arnesVersion = "0.2.0"
+
 // MARK: - Shared setup
 
 func parseDialect(_ raw: String) throws -> DialectOverride {
@@ -30,6 +33,7 @@ struct Arnes: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     commandName: "arnes",
     abstract: "Arnes — a model-adaptive agent harness for OpenRouter.",
+    version: arnesVersion,
     subcommands: [Interactive.self, Chat.self, Do.self, Resume.self, Models.self, Status.self, Runs.self, Sessions.self, Eval.self, Evals.self, Probe.self, Mcp.self],
     defaultSubcommand: Interactive.self)
 }

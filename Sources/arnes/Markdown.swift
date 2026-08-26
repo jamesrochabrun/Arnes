@@ -28,7 +28,13 @@ final class StreamingMarkdown {
   /// A trailing `*` held back until the next character decides `**` vs a literal star.
   private var pendingAsterisk = false
   private let styled: Bool
-  private let highlighter = SyntaxHighlighter(format: ANSICodeFormat())
+  #if os(Linux)
+  // Splash's SwiftGrammar builds its delimiter set by mutating an inverted CharacterSet,
+  // which aborts in corelibs-foundation — Swift code renders unhighlighted on Linux.
+  private let highlighter: SyntaxHighlighter<ANSICodeFormat>? = nil
+  #else
+  private let highlighter: SyntaxHighlighter<ANSICodeFormat>? = SyntaxHighlighter(format: ANSICodeFormat())
+  #endif
 
   init(styled: Bool = ANSI.isTTY) {
     self.styled = styled
@@ -219,7 +225,8 @@ final class StreamingMarkdown {
   }
 
   private func highlight(_ line: String, language: String) -> String {
-    language.lowercased() == "swift" ? highlighter.highlight(line) : line
+    guard let highlighter, language.lowercased() == "swift" else { return line }
+    return highlighter.highlight(line)
   }
 
   private static let bold = "\u{1B}[1m"
