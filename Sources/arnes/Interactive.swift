@@ -137,6 +137,7 @@ struct Interactive: AsyncParsableCommand {
     // The pinned bottom bar: transcript scrolls above it, input/status stay below.
     // Inactive when either fd is piped, leaving output identical to plain printing.
     let screen = Screen()
+    screen.measureOrigin()
     if screen.isActive {
       spinner.sink = { screen.setStatus($0) }
     }

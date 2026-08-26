@@ -31,9 +31,53 @@ final class Screen: @unchecked Sendable {
   private var regionRows = 0    // rows the bar region currently occupies on screen
   private var parkRow = 0       // row within the region where the cursor is parked
   private var closed = false
+  /// 1-based screen row where the next transcript line lands (the region's top).
+  /// Measured once via DSR at startup, then tracked from what we write; <= 0 means
+  /// unknown, which disables bottom-pinning and leaves the bar under the content.
+  private var transcriptRow = 0
 
   static let idlePlaceholder = "message · /help for commands"
   static let busyPlaceholder = "type to queue · ctrl+c interrupts"
+
+  /// Asks the terminal where the cursor is (DSR `ESC[6n`) so the first bar draw can
+  /// pad down to the window's bottom rows. Call once at startup, before any output
+  /// and before the raw-mode readers own stdin — the reply arrives on stdin.
+  func measureOrigin() {
+    guard isActive else { return }
+    lock.lock()
+    defer { lock.unlock() }
+    var original = termios()
+    tcgetattr(STDIN_FILENO, &original)
+    var raw = original
+    raw.c_lflag &= ~tcflag_t(ICANON | ECHO)
+    tcsetattr(STDIN_FILENO, TCSANOW, &raw)
+    defer {
+      var restore = original
+      tcsetattr(STDIN_FILENO, TCSANOW, &restore)
+    }
+    write("\u{1B}[6n")
+    var response: [UInt8] = []
+    var attempts = 0
+    while attempts < 50, response.last != UInt8(ascii: "R") {
+      var fds = pollfd(fd: STDIN_FILENO, events: Int16(POLLIN), revents: 0)
+      guard poll(&fds, 1, 10) > 0, fds.revents & Int16(POLLIN) != 0 else {
+        attempts += 1
+        continue
+      }
+      var byte: UInt8 = 0
+      guard read(STDIN_FILENO, &byte, 1) == 1 else { break }
+      response.append(byte)
+    }
+    // Reply is ESC [ row ; col R — parse defensively, stray bytes just fail the parse.
+    let text = String(decoding: response, as: UTF8.self)
+    guard
+      text.hasSuffix("R"),
+      let bracket = text.lastIndex(of: "["),
+      let row = Int(text[text.index(after: bracket)...].prefix(while: { $0.isNumber })),
+      row > 0
+    else { return }
+    transcriptRow = row
+  }
 
   // MARK: Transcript
 
@@ -150,11 +194,17 @@ final class Screen: @unchecked Sendable {
       regionRows = 0
       parkRow = 0
     }
+    let columns = max(20, Self.terminalColumns)
+    let screenRows = Self.terminalRows
     for line in commit {
       out += line + "\n"
+      if transcriptRow > 0 {
+        // Wrap-aware: a long committed line occupies several physical rows.
+        let physical = max(1, (ANSIText.visibleCount(line) + columns - 1) / columns)
+        transcriptRow = min(screenRows, transcriptRow + physical)
+      }
     }
 
-    let columns = max(20, Self.terminalColumns)
     var lines: [String] = []
     var inputRow: Int?
     var inputColumn = 0
@@ -177,6 +227,20 @@ final class Screen: @unchecked Sendable {
     }
 
     if !lines.isEmpty {
+      // Pin the bar to the window's bottom rows: pad blank lines down so the region's
+      // last row is the last screen row. Once the screen is full the padding is zero
+      // and natural scrolling keeps it there.
+      if transcriptRow > 0 {
+        let padding = screenRows - lines.count + 1 - transcriptRow
+        if padding > 0 {
+          out += String(repeating: "\n", count: padding)
+          transcriptRow += padding
+        }
+        let overflow = transcriptRow + lines.count - 1 - screenRows
+        if overflow > 0 {
+          transcriptRow -= overflow // drawing past the bottom scrolls the screen
+        }
+      }
       out += lines.joined(separator: "\n")
       let last = lines.count - 1
       if let inputRow {
@@ -240,6 +304,17 @@ final class Screen: @unchecked Sendable {
     }
     return 80
   }
+
+  static var terminalRows: Int {
+    var size = winsize()
+    if ioctl(STDOUT_FILENO, numericCast(TIOCGWINSZ), &size) == 0, size.ws_row > 0 {
+      return Int(size.ws_row)
+    }
+    if let env = ProcessInfo.processInfo.environment["LINES"], let rows = Int(env) {
+      return rows
+    }
+    return 24
+  }
 }
 
 // MARK: - ANSIText
@@ -249,6 +324,14 @@ enum ANSIText {
   private enum Token {
     case character(Character)
     case escape(String)
+  }
+
+  /// Visible characters, ignoring escape sequences (physical-row math for wrapping).
+  static func visibleCount(_ styled: String) -> Int {
+    tokenize(styled).reduce(0) { count, token in
+      if case .character = token { return count + 1 }
+      return count
+    }
   }
 
   /// Keeps the last `max` visible characters, preserving the SGR styles that were
