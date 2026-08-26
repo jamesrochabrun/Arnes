@@ -12,6 +12,22 @@ final class LineReader {
   /// line; the reader redraws the prompt underneath it.
   var onCtrlO: (() -> Void)?
 
+  /// When set (and active), editing state is drawn in the screen's pinned bottom box
+  /// instead of inline, and notices go through the screen so the box stays below them.
+  var screen: Screen?
+
+  /// A DSR cursor-position report arrived while this reader owned stdin (the screen
+  /// requests one after a resize) — forwards the 1-based row.
+  var onCursorReport: ((Int) -> Void)?
+
+  /// Row from CSI params ("row;col").
+  static func reportRow(_ params: [UInt8]) -> Int? {
+    let text = String(decoding: params, as: UTF8.self)
+    return Int(text.prefix(while: { $0.isNumber }))
+  }
+
+  private var usesScreen: Bool { screen?.isActive == true }
+
   private let historyURL: URL?
   private var history: [String] = []
   private let isTTY = isatty(0) != 0
@@ -62,6 +78,10 @@ final class LineReader {
     var interruptArmed = false
 
     func redraw() {
+      if usesScreen, let screen {
+        screen.setInput(prompt: prompt, buffer: String(buffer), cursor: cursor)
+        return
+      }
       var out = "\r\u{1B}[K" + prompt + String(buffer)
       let tail = buffer.count - cursor
       if tail > 0 {
@@ -70,27 +90,43 @@ final class LineReader {
       write(out)
     }
 
-    write(prompt + String(buffer))
+    func endInput() {
+      if usesScreen, let screen {
+        screen.setInput(prompt: prompt, buffer: "", cursor: 0)
+      } else {
+        write("\n")
+      }
+    }
+
+    if usesScreen {
+      redraw()
+    } else {
+      write(prompt + String(buffer))
+    }
 
     while true {
       guard let byte = readByte() else {
-        write("\n")
+        endInput()
         return buffer.isEmpty ? nil : String(buffer)
       }
 
       switch byte {
       case 0x0A, 0x0D: // enter
-        write("\n")
+        endInput()
         return String(buffer)
 
       case 0x03: // Ctrl-C
         if buffer.isEmpty {
           if interruptArmed {
-            write("\n")
+            endInput()
             return nil
           }
           interruptArmed = true
-          write("\r\u{1B}[K" + ANSI.dim("(^C again to exit)") + "\n" + prompt)
+          if usesScreen, let screen {
+            screen.print(ANSI.dim("(^C again to exit)"))
+          } else {
+            write("\r\u{1B}[K" + ANSI.dim("(^C again to exit)") + "\n" + prompt)
+          }
         } else {
           buffer.removeAll()
           cursor = 0
@@ -100,7 +136,7 @@ final class LineReader {
 
       case 0x04: // Ctrl-D
         if buffer.isEmpty {
-          write("\n")
+          endInput()
           return nil
         }
 
@@ -129,8 +165,20 @@ final class LineReader {
         redraw()
 
       case 0x1B: // escape sequence
-        guard readByte() == UInt8(ascii: "["), let code = readByte() else { continue }
-        switch code {
+        guard readByte() == UInt8(ascii: "[") else { continue }
+        // Full CSI parse: parameter bytes until the final byte (0x40–0x7E), so
+        // multi-byte sequences (delete, cursor-position reports) never leak into
+        // the buffer as text.
+        var params: [UInt8] = []
+        var final: UInt8?
+        while let next = readByte() {
+          if (0x40...0x7E).contains(next) {
+            final = next
+            break
+          }
+          params.append(next)
+        }
+        switch final {
         case UInt8(ascii: "A"): // up — history back
           if historyIndex > 0 {
             if historyIndex == history.count { pendingLine = buffer }
@@ -156,11 +204,14 @@ final class LineReader {
             cursor -= 1
             redraw()
           }
-        case UInt8(ascii: "3"): // delete key: ESC [ 3 ~
-          _ = readByte()
+        case UInt8(ascii: "~") where params == [UInt8(ascii: "3")]: // delete key
           if cursor < buffer.count {
             buffer.remove(at: cursor)
             redraw()
+          }
+        case UInt8(ascii: "R"): // cursor-position report (row;col) — for the screen
+          if let row = Self.reportRow(params) {
+            onCursorReport?(row)
           }
         default:
           continue

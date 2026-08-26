@@ -13,6 +13,43 @@ final class Renderer {
   private var printedReasoning = false
   private var markdown = StreamingMarkdown()
 
+  /// When set, all output routes through the pinned-bar screen; nil keeps the plain
+  /// top-to-bottom printing used by piped sessions.
+  private let screen: Screen?
+
+  init(screen: Screen? = nil) {
+    self.screen = screen
+  }
+
+  /// A committed transcript line.
+  private func line(_ text: String) {
+    if let screen {
+      screen.print(text)
+    } else {
+      Swift.print(text)
+    }
+  }
+
+  /// Streamed styled text; the screen keeps the open line inside the bar region.
+  private func streamOut(_ text: String) {
+    if let screen {
+      screen.stream(text)
+    } else {
+      Swift.print(text, terminator: "")
+      fflush(stdout)
+    }
+  }
+
+  /// Ends an open streamed line (plus a final styled tail).
+  private func endLine(_ tail: String = "") {
+    if let screen {
+      screen.stream(tail)
+      screen.finishStream()
+    } else {
+      Swift.print(tail)
+    }
+  }
+
   /// Toggled from the key-watcher thread while render() runs on the turn task.
   private let verboseLock = NSLock()
   private var verboseFlag = false
@@ -40,74 +77,72 @@ final class Renderer {
     case .textDelta(let delta):
       if printedReasoning {
         // Separate the answer from dimmed reasoning output.
-        print()
+        endLine()
         printedReasoning = false
       }
       printedDelta = true
-      print(markdown.feed(delta), terminator: "")
-      fflush(stdout)
+      streamOut(markdown.feed(delta))
 
     case .reasoningDelta(let delta):
       printedReasoning = true
-      print(ANSI.dim(delta), terminator: "")
-      fflush(stdout)
+      streamOut(ANSI.dim(delta))
 
     case .assistantText(let text):
       if printedDelta {
         // The streamed deltas already showed the text; emit what's still buffered
         // (a partial line, open styles) and end the line.
-        print(markdown.flush())
+        endLine(markdown.flush())
       } else {
-        print(markdown.feed(text) + markdown.flush())
+        line(markdown.feed(text) + markdown.flush())
       }
       printedDelta = false
 
     case .toolCall(let name, let arguments):
       endStreamedLineIfNeeded()
       if verbose {
-        print(ANSI.dim("→ \(name) \(String(arguments.prefix(120)))"))
+        line(ANSI.dim("→ \(name) \(String(arguments.prefix(120)))"))
       } else {
-        print(ANSI.dim("• \(name) \(Self.conciseArguments(arguments))"))
+        line(ANSI.dim("• \(name) \(Self.conciseArguments(arguments))"))
       }
 
     case .toolResult(let name, let preview):
       let firstLine = preview.split(separator: "\n").first.map(String.init) ?? preview
       if verbose {
-        print(ANSI.dim("← \(name): \(String(firstLine.prefix(120)))"))
+        line(ANSI.dim("← \(name): \(String(firstLine.prefix(120)))"))
       } else if firstLine.hasPrefix("error") || firstLine.hasPrefix("user denied") {
         // Concise mode stays quiet on success; failures still surface.
-        print(ANSI.red("✗ \(name): \(String(firstLine.prefix(120)))"))
+        line(ANSI.red("✗ \(name): \(String(firstLine.prefix(120)))"))
       }
 
     case .toolDenied(let name, _):
-      print(ANSI.yellow("⊘ \(name) denied"))
+      line(ANSI.yellow("⊘ \(name) denied"))
 
     case .routed(let model, let provider):
       endStreamedLineIfNeeded()
-      print(ANSI.cyan("⇄ \(model)\(provider.map { " (\($0))" } ?? "")"))
+      line(ANSI.cyan("⇄ \(model)\(provider.map { " (\($0))" } ?? "")"))
 
     case .dialectFellBack(let dialect, let reason):
       endStreamedLineIfNeeded()
-      print(ANSI.yellow("⤵ \(dialect) dialect failed (\(String(reason.prefix(80)))) — fell back to chat, recorded"))
+      line(ANSI.yellow("⤵ \(dialect) dialect failed (\(String(reason.prefix(80)))) — fell back to chat, recorded"))
 
     case .verifier(let passed, let verdict):
-      print(passed ? ANSI.green("✔ \(verdict)") : ANSI.red("✘ \(verdict)"))
+      line(passed ? ANSI.green("✔ \(verdict)") : ANSI.red("✘ \(verdict)"))
 
     case .interrupted:
       endStreamedLineIfNeeded()
-      print(ANSI.yellow("⏹ interrupted"))
+      line(ANSI.yellow("⏹ interrupted"))
 
     case .nudged:
       endStreamedLineIfNeeded()
-      print(ANSI.dim("↻ paused without finishing — nudged to continue"))
+      line(ANSI.dim("↻ paused without finishing — nudged to continue"))
 
     case .stepLimitReached(let maxSteps):
       endStreamedLineIfNeeded()
-      print(ANSI.yellow("⚠ step limit (\(maxSteps)) reached — the task may be unfinished; say \"continue\" to keep going"))
+      line(ANSI.yellow("⚠ step limit (\(maxSteps)) reached — the task may be unfinished; say \"continue\" to keep going"))
 
     case .compacted(let summarized, let kept):
       endStreamedLineIfNeeded()
-      print(ANSI.dim("◈ context compacted: \(summarized) older messages summarized · \(kept) kept verbatim"))
+      line(ANSI.dim("◈ context compacted: \(summarized) older messages summarized · \(kept) kept verbatim"))
 
     case .turnFinished(let stats):
       endStreamedLineIfNeeded()
@@ -120,13 +155,13 @@ final class Renderer {
       if let used = stats.promptTokens, let context = stats.contextLength, context > 0 {
         footer += " · ctx \(used * 100 / context)%"
       }
-      print(ANSI.dim(footer))
+      line(ANSI.dim(footer))
     }
   }
 
   private func endStreamedLineIfNeeded() {
     if printedDelta || printedReasoning {
-      print(markdown.flush())
+      endLine(markdown.flush())
       printedDelta = false
       printedReasoning = false
     }

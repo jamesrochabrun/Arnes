@@ -4,7 +4,7 @@ import Foundation
 import OpenRouterSwift
 
 /// Single source of truth for the CLI version — shown in the header and `--version`.
-let arnesVersion = "0.4.1"
+let arnesVersion = "0.5.0"
 
 // MARK: - Shared setup
 
@@ -15,9 +15,32 @@ func parseDialect(_ raw: String) throws -> DialectOverride {
   return dialect
 }
 
+/// `OPENROUTER_API_KEY` from the environment wins; otherwise fall back to
+/// `~/.arnes/credentials` (first non-empty, non-`#` line, optional
+/// `OPENROUTER_API_KEY=` prefix) so arnes works from shells that never source
+/// the user's profile — editor task runners, launchers, non-interactive scripts.
+func resolveAPIKey() -> String? {
+  if let key = ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"], !key.isEmpty {
+    return key
+  }
+  let url = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".arnes/credentials")
+  guard let contents = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+  for rawLine in contents.split(whereSeparator: \.isNewline) {
+    var line = rawLine.trimmingCharacters(in: .whitespaces)
+    guard !line.isEmpty, !line.hasPrefix("#") else { continue }
+    if line.hasPrefix("OPENROUTER_API_KEY=") {
+      line = String(line.dropFirst("OPENROUTER_API_KEY=".count))
+        .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+    }
+    return line.isEmpty ? nil : line
+  }
+  return nil
+}
+
 func makeService() throws -> OpenRouterService {
-  guard let key = ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"], !key.isEmpty else {
-    throw ValidationError("Set OPENROUTER_API_KEY in your environment.")
+  guard let key = resolveAPIKey() else {
+    throw ValidationError(
+      "Set OPENROUTER_API_KEY in your environment, or put the key in ~/.arnes/credentials.")
   }
   return OpenRouter.service(
     apiKey: key,

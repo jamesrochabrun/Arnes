@@ -21,6 +21,10 @@ export OPENROUTER_API_KEY=sk-or-...
 arnes --help
 ```
 
+The key can also live in `~/.arnes/credentials` (just the key on one line, or
+`OPENROUTER_API_KEY=sk-or-...`; `chmod 600` it) — used whenever the env var is unset, so
+arnes works from shells that never source your profile.
+
 Binaries are also attached to each [GitHub release](https://github.com/jamesrochabrun/Arnes/releases).
 Or build from source:
 
