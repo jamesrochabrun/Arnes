@@ -31,6 +31,12 @@ public enum AgentEvent: Sendable {
   case dialectFellBack(dialect: String, reason: String)
   /// The turn was cancelled (Ctrl-C / `Session.interrupt`).
   case interrupted
+  /// The model stopped without calling a tool or delivering a result (empty reply,
+  /// or trailing "I'll do X next" narration); the session asked it to continue.
+  case nudged(reason: String)
+  /// `maxStepsPerTurn` ran out before the model finished — the turn was cut off,
+  /// not completed.
+  case stepLimitReached(maxSteps: Int)
   /// Older history was auto-summarized because the context was nearly full.
   case compacted(summarizedMessages: Int, keptMessages: Int)
   /// The turn completed; footer numbers for rendering.

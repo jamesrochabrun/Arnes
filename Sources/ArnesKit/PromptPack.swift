@@ -21,13 +21,19 @@ public struct PromptPack: Sendable {
     - Prefer edit_file for small, targeted changes; use write_file only to create \
     new files or fully rewrite one.
     - Make the smallest change that completes the task.
+    - Keep going until the task is done. Never end a reply by announcing what you \
+    will do next — make that tool call instead. Stop only to deliver the final \
+    result or to ask the user something you cannot resolve yourself.
+    - Keep narration minimal: no play-by-play before tool calls; the final summary \
+    carries the explanation.
     - When the task is done, reply with a short summary of what changed and why.
     - If the task is impossible or unsafe, say so instead of improvising.
     """
 
   static let familyDefaults: [ModelFamily: String] = [
     .anthropic: """
-      Work step by step. Think before each tool call. Prefer precise, minimal diffs.
+      Work step by step and keep momentum — chain tool calls without pausing to \
+      narrate. Prefer precise, minimal diffs.
       """,
     .openai: """
       Call tools with exact JSON arguments. Prefer rewriting whole functions over \

@@ -291,6 +291,41 @@ public actor Session {
     return CompactionResult(summarizedMessages: dropped.count, keptMessages: kept.count, costUSD: cost)
   }
 
+  // MARK: Anti-stall nudge
+
+  /// At most this many continuation nudges per turn — enough to recover a stall,
+  /// bounded so a model with nothing left to do can't loop on nudges.
+  static let maxNudgesPerTurn = 2
+
+  /// What the model sees when it stalls (rides the history as a user message, so it
+  /// survives dialect translation and resume).
+  static let continueNudge = """
+    [arnes] Your reply ended without a tool call or a final result. If the task is \
+    complete, reply now with the final summary only. Otherwise continue immediately: \
+    make the next tool call instead of describing what you will do.
+    """
+
+  /// Whether a no-tool-call reply reads like a stall: empty, ends with a colon, or
+  /// its last sentence announces work ("let me check…", "I'll now…") instead of
+  /// reporting a result. Conservative on purpose — false positives cost one bounded
+  /// extra request; false negatives end the turn early.
+  static func looksUnfinished(_ text: String) -> Bool {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmed.isEmpty { return true }
+    if trimmed.hasSuffix(":") { return true }
+    let sentences = trimmed.split(whereSeparator: { ".!?\n".contains($0) })
+    guard let last = sentences.last?.trimmingCharacters(in: .whitespaces).lowercased(),
+          !last.isEmpty
+    else { return false }
+    if last.contains("let me know") { return false }
+    let intents = [
+      "let me ", "i'll ", "i will ", "i'm going to ", "im going to ", "going to ",
+      "about to ", "now i ", "next i ", "next, i ", "then i ", "first, i ",
+      "let's ", "time to ",
+    ]
+    return intents.contains { last.contains($0) }
+  }
+
   private static let compactionPrompt = """
     You compress an agent conversation into notes the assistant will rely on to continue \
     seamlessly. Preserve: the user's goals and constraints, decisions made, file paths and \
@@ -381,6 +416,7 @@ public actor Session {
     var finalText = ""
     var interrupted = false
     var turnError: Error?
+    var nudgesUsed = 0
 
     loop: for _ in 0..<maxStepsPerTurn {
       if Task.isCancelled {
@@ -457,6 +493,22 @@ public actor Session {
 
       let toolCalls = step.toolCalls
       guard !toolCalls.isEmpty else {
+        // The model stopped calling tools. An empty reply, or one trailing off with
+        // "let me check X" narration, is a stall — not a finish. Nudge it back into
+        // the loop instead of silently ending the turn; bounded so a model that
+        // genuinely has nothing to do can't ping-pong forever.
+        if profile.supportsTools, !tools.isEmpty, nudgesUsed < Self.maxNudgesPerTurn,
+           Self.looksUnfinished(step.text)
+        {
+          nudgesUsed += 1
+          if !step.text.isEmpty {
+            appendToHistory(.assistant(step.text))
+          }
+          appendToHistory(.user(Self.continueNudge))
+          continuation.yield(.nudged(
+            reason: step.text.isEmpty ? "empty reply" : "announced more work"))
+          continue
+        }
         if !step.text.isEmpty {
           appendToHistory(.assistant(step.text))
         }
@@ -502,6 +554,12 @@ public actor Session {
         }
         break loop
       }
+    }
+
+    if !record.finished, !interrupted, turnError == nil {
+      // The for-loop ran out of steps mid-task — surface it instead of ending the
+      // turn as if the model had chosen to stop.
+      continuation.yield(.stepLimitReached(maxSteps: maxStepsPerTurn))
     }
 
     if interrupted {
