@@ -34,7 +34,7 @@ final class Screen: @unchecked Sendable {
   private var drawnWidths: [Int] = []
   private var parkIndex = 0     // region line the cursor is parked on
   private var parkColumn = 0    // 0-based column of the parked cursor
-  private var measurePending = false
+  private var pendingReports = 0 // outstanding DSR queries; every reply applies, last wins
   private var closed = false
   /// 1-based screen row where the next transcript line lands (the region's top).
   /// Measured once via DSR at startup, then tracked from what we write; <= 0 means
@@ -191,7 +191,7 @@ final class Screen: @unchecked Sendable {
     transcriptRow = 0 // unknown until the terminal answers
     repaint()
     guard !drawnWidths.isEmpty else { return }
-    measurePending = true
+    pendingReports += 1
     write("\u{1B}[6n")
   }
 
@@ -200,8 +200,8 @@ final class Screen: @unchecked Sendable {
     guard isActive, !closed else { return }
     lock.lock()
     defer { lock.unlock() }
-    guard measurePending, row > 0 else { return }
-    measurePending = false
+    guard pendingReports > 0, row > 0 else { return }
+    pendingReports -= 1
     // The cursor is parked `parkIndex` freshly-drawn (single-row) lines below the
     // region top, which is where the next transcript line lands.
     transcriptRow = max(1, row - parkIndex)
@@ -242,16 +242,20 @@ final class Screen: @unchecked Sendable {
       widths.append(ANSIText.visibleCount(clamped))
     }
     if showBox {
-      let inner = columns - 4 // "│ " … " │"
+      // One column narrower than the terminal on purpose: a completely filled row is
+      // indistinguishable from a soft-wrapped one, so resize reflow would join it
+      // with the next line and break the erase math.
+      let boxWidth = columns - 1
+      let inner = boxWidth - 4 // "│ " … " │"
       let label = queued > 0 ? " \(queued) queued " : ""
       lines.append(ANSI.accent("╭─") + ANSI.dim(label)
-        + ANSI.accent(String(repeating: "─", count: max(0, columns - 3 - label.count)) + "╮"))
+        + ANSI.accent(String(repeating: "─", count: max(0, boxWidth - 3 - label.count)) + "╮"))
       let (view, column) = inputLine(inner: inner)
       inputColumn = column
       inputRow = lines.count
       lines.append(view)
-      lines.append(ANSI.accent("╰" + String(repeating: "─", count: columns - 2) + "╯"))
-      widths.append(contentsOf: [columns, columns, columns])
+      lines.append(ANSI.accent("╰" + String(repeating: "─", count: boxWidth - 2) + "╯"))
+      widths.append(contentsOf: [boxWidth, boxWidth, boxWidth])
     }
 
     if !lines.isEmpty {
