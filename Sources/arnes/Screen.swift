@@ -34,6 +34,10 @@ final class Screen: @unchecked Sendable {
   private var drawnWidths: [Int] = []
   private var parkIndex = 0     // region line the cursor is parked on
   private var parkColumn = 0    // 0-based column of the parked cursor
+  /// Blank rows drawn between the transcript (plus any partial line) and the bar so
+  /// the bar sits on the window's last rows. Part of the region — erased and redrawn
+  /// every repaint — so commits keep landing at the top instead of above the bar.
+  private var gapRows = 0
   private var pendingReports = 0 // outstanding DSR queries; every reply applies, last wins
   private var closed = false
   /// 1-based screen row where the next transcript line lands (the region's top).
@@ -219,9 +223,9 @@ final class Screen: @unchecked Sendable {
     defer { lock.unlock() }
     guard pendingReports > 0, row > 0 else { return }
     pendingReports -= 1
-    // The cursor is parked `parkIndex` freshly-drawn (single-row) lines below the
-    // region top, which is where the next transcript line lands.
-    transcriptRow = max(1, row - parkIndex)
+    // The cursor is parked `parkIndex` freshly-drawn (single-row) lines plus the
+    // blank gap below the region top, which is where the next transcript line lands.
+    transcriptRow = max(1, row - parkIndex - gapRows)
     if !drawnWidths.isEmpty {
       repaint() // apply bottom-pinning padding at the new size
     }
@@ -248,10 +252,12 @@ final class Screen: @unchecked Sendable {
     var widths: [Int] = []
     var inputRow: Int?
     var inputColumn = 0
+    var topCount = 0 // leading region lines that stay glued under the transcript
     if !partial.isEmpty {
       let clamped = ANSIText.clampTail(partial, to: columns - 1) + "\u{1B}[0m"
       lines.append(clamped)
       widths.append(ANSIText.visibleCount(clamped))
+      topCount = 1
     }
     if let status {
       let clamped = ANSIText.clampTail(status, to: columns - 1) + "\u{1B}[0m"
@@ -276,21 +282,28 @@ final class Screen: @unchecked Sendable {
     }
 
     if !lines.isEmpty {
-      // Pin the bar to the window's bottom rows: pad blank lines down so the region's
-      // last row is the last screen row. Once the screen is full the padding is zero
-      // and natural scrolling keeps it there.
-      if transcriptRow > 0 {
-        let padding = screenRows - lines.count + 1 - transcriptRow
-        if padding > 0 {
-          out += String(repeating: "\n", count: padding)
-          transcriptRow += padding
-        }
-        let overflow = transcriptRow + lines.count - 1 - screenRows
-        if overflow > 0 {
-          transcriptRow -= overflow // drawing past the bottom scrolls the screen
+      // Pin the status line and input box to the window's bottom rows while the
+      // transcript (and any streaming partial line) stays anchored under the last
+      // committed line at the top. The blank gap between them belongs to the region —
+      // erased and redrawn every repaint, never committed — so the next transcript
+      // line keeps landing at the top. Once the screen fills the gap hits zero and
+      // drawing past the bottom row scrolls naturally, keeping the bar pinned.
+      var gap = 0
+      if transcriptRow > 0, lines.count > topCount {
+        gap = screenRows - transcriptRow - lines.count + 1
+        if gap < 0 {
+          transcriptRow = max(1, transcriptRow + gap) // drawing past the bottom scrolls
+          gap = 0
         }
       }
-      out += lines.joined(separator: "\n")
+      if topCount > 0 {
+        out += lines[..<topCount].joined(separator: "\n")
+        if lines.count > topCount { out += String(repeating: "\n", count: gap + 1) }
+      } else if gap > 0 {
+        out += String(repeating: "\n", count: gap)
+      }
+      gapRows = gap
+      out += lines[topCount...].joined(separator: "\n")
       let last = lines.count - 1
       if let inputRow {
         if last - inputRow > 0 { out += "\u{1B}[\(last - inputRow)A" }
@@ -315,11 +328,13 @@ final class Screen: @unchecked Sendable {
     for index in 0..<parkIndex {
       up += max(1, (drawnWidths[index] + columns - 1) / columns)
     }
+    up += gapRows // blank rows never wrap, so the count survives resizes
     var out = up > 0 ? "\u{1B}[\(up)A" : ""
     out += "\r\u{1B}[J"
     drawnWidths = []
     parkIndex = 0
     parkColumn = 0
+    gapRows = 0
     return out
   }
 
