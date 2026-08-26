@@ -8,7 +8,22 @@ permissions:
   contents: write
 
 jobs:
+  # The tag must match `arnesVersion` in source — the binary, git tag, and npm
+  # version can never drift.
+  version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Check tag matches arnesVersion
+        run: |
+          v=$(sed -n 's/^let arnesVersion = "\(.*\)"$/\1/p' Sources/arnes/ArnesCommand.swift)
+          if [ "v$v" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME does not match arnesVersion \"$v\" in Sources/arnes/ArnesCommand.swift" >&2
+            exit 1
+          fi
+
   linux:
+    needs: version
     strategy:
       matrix:
         include:
@@ -31,17 +46,21 @@ jobs:
           path: arnes-linux-${{ matrix.arch }}
 
   macos:
+    needs: version
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v5
-      - name: Build
+      - name: Build (universal, split per arch)
         run: |
-          swift build -c release
-          cp .build/release/arnes arnes-macos-arm64
+          swift build -c release --arch arm64 --arch x86_64
+          bin=.build/apple/Products/Release/arnes
+          lipo -thin arm64  "$bin" -output arnes-macos-arm64
+          lipo -thin x86_64 "$bin" -output arnes-macos-x86_64
+          codesign -f -s - arnes-macos-arm64 arnes-macos-x86_64
       - uses: actions/upload-artifact@v4
         with:
-          name: arnes-macos-arm64
-          path: arnes-macos-arm64
+          name: arnes-macos
+          path: arnes-macos-*
 
   release:
     needs: [linux, macos]
@@ -58,3 +77,36 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" dist/* \
             --title "$GITHUB_REF_NAME" --generate-notes
+
+  npm:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # provenance; also enables npm trusted publishing once configured
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Generate npm packages
+        run: scripts/npm-release.sh "${GITHUB_REF_NAME#v}" dist .build/npm
+      - name: Publish
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          npm install -g npm@latest
+          # Token auth when NPM_TOKEN is set; otherwise npm >= 11.5.1 falls back to
+          # OIDC trusted publishing (configure per package on npmjs.com).
+          if [ -n "$NPM_TOKEN" ]; then
+            echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" > ~/.npmrc
+          fi
+          # Platform packages first so the launcher's optionalDependencies resolve
+          # the moment `arnes` lands.
+          for pkg in arnes-darwin-arm64 arnes-darwin-x64 arnes-linux-x64 arnes-linux-arm64 arnes; do
+            (cd ".build/npm/$pkg" && npm publish --provenance --access public)
+          done

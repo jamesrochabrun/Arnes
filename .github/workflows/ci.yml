@@ -30,3 +30,28 @@ jobs:
       - uses: actions/checkout@v5
       - name: Static-stdlib release build
         run: swift build -c release --static-swift-stdlib
+
+  # Same idea for the npm packaging: run the generator against stub binaries and
+  # exercise the launcher shim end-to-end (resolution, argv, exit code).
+  npm-packaging:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Generate + smoke-test shim
+        run: |
+          mkdir -p dist
+          for a in arnes-macos-arm64 arnes-macos-x86_64 arnes-linux-x86_64 arnes-linux-aarch64; do
+            printf '#!/bin/sh\necho "stub $0: $@"\nexit 7\n' > "dist/$a"
+            chmod +x "dist/$a"
+          done
+          scripts/npm-release.sh 0.0.1 dist .build/npm
+          mkdir -p .build/install/node_modules
+          cp -R .build/npm/arnes .build/install/node_modules/arnes
+          cp -R .build/npm/arnes-linux-x64 .build/install/node_modules/arnes-linux-x64
+          out=$(node .build/install/node_modules/arnes/bin/arnes.js hello --world) && rc=0 || rc=$?
+          echo "$out"
+          [ "$rc" = 7 ] || { echo "expected exit 7, got $rc" >&2; exit 1; }
+          case "$out" in *"hello --world"*) ;; *) echo "argv not forwarded" >&2; exit 1;; esac

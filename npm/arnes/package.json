@@ -1,0 +1,25 @@
+{
+  "name": "arnes",
+  "version": "0.0.0",
+  "description": "Model-adaptive agent harness on OpenRouter — interactive agent CLI",
+  "keywords": ["agent", "cli", "llm", "openrouter", "harness"],
+  "license": "MIT",
+  "homepage": "https://github.com/jamesrochabrun/Arnes",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jamesrochabrun/Arnes.git"
+  },
+  "bin": {
+    "arnes": "bin/arnes.js"
+  },
+  "files": ["bin/arnes.js"],
+  "engines": {
+    "node": ">=18"
+  },
+  "optionalDependencies": {
+    "arnes-darwin-arm64": "0.0.0",
+    "arnes-darwin-x64": "0.0.0",
+    "arnes-linux-x64": "0.0.0",
+    "arnes-linux-arm64": "0.0.0"
+  }
+}
