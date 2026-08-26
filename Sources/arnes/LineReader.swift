@@ -8,6 +8,10 @@ import Glibc
 /// Falls back to `Swift.readLine()` when stdin isn't a TTY so piped input works.
 /// Zero dependencies on purpose.
 final class LineReader {
+  /// Ctrl-O at the prompt (verbosity toggle). The handler prints its own notice
+  /// line; the reader redraws the prompt underneath it.
+  var onCtrlO: (() -> Void)?
+
   private let historyURL: URL?
   private var history: [String] = []
   private let isTTY = isatty(0) != 0
@@ -20,13 +24,14 @@ final class LineReader {
     }
   }
 
-  /// Reads one line. Returns nil to exit (Ctrl-D on empty line, double Ctrl-C, or EOF).
-  func readLine(prompt: String) -> String? {
+  /// Reads one line, optionally pre-filled (an unfinished type-ahead fragment from
+  /// the last turn). Returns nil to exit (Ctrl-D on empty line, double Ctrl-C, or EOF).
+  func readLine(prompt: String, initial: String = "") -> String? {
     guard isTTY else {
       print(prompt, terminator: "")
       return Swift.readLine()
     }
-    guard let line = readRaw(prompt: prompt) else { return nil }
+    guard let line = readRaw(prompt: prompt, initial: initial) else { return nil }
     if !line.isEmpty, line != history.last {
       history.append(line)
       if history.count > Self.maxHistory {
@@ -39,7 +44,7 @@ final class LineReader {
 
   // MARK: Raw mode
 
-  private func readRaw(prompt: String) -> String? {
+  private func readRaw(prompt: String, initial: String) -> String? {
     var original = termios()
     tcgetattr(STDIN_FILENO, &original)
     var raw = original
@@ -50,8 +55,8 @@ final class LineReader {
       tcsetattr(STDIN_FILENO, TCSAFLUSH, &restore)
     }
 
-    var buffer: [Character] = []
-    var cursor = 0
+    var buffer: [Character] = Array(initial)
+    var cursor = buffer.count
     var historyIndex = history.count
     var pendingLine: [Character] = []
     var interruptArmed = false
@@ -65,7 +70,7 @@ final class LineReader {
       write(out)
     }
 
-    write(prompt)
+    write(prompt + String(buffer))
 
     while true {
       guard let byte = readByte() else {
@@ -105,6 +110,10 @@ final class LineReader {
           cursor -= 1
           redraw()
         }
+
+      case 0x0F: // Ctrl-O — toggle tool-output verbosity
+        onCtrlO?()
+        redraw()
 
       case 0x15: // Ctrl-U — clear line
         buffer.removeAll()

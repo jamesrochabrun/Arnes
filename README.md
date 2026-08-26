@@ -39,6 +39,10 @@ arnes --resume <id>                     # resume a specific one (ids from `arnes
 # asks before each mutating tool (bash / write_file / edit_file):
 #   y = allow once · a = always allow this tool this session · n = deny (the model is told)
 # read-only tools (read_file / grep / glob) run freely; Ctrl-C interrupts the turn safely;
+# tool activity renders as one concise line per call (• edit_file Sources/App/Router.swift) —
+# Ctrl-O toggles the verbose form (raw arguments + result previews), mid-turn or at the prompt;
+# typing while a turn streams queues input: lines ended with Enter run next, in order,
+# and an unfinished fragment pre-fills the next prompt;
 # every turn ends with a status line:
 # ─ openrouter/auto → deepseek/deepseek-v4-flash · 3 steps · 2 tools · turn $0.0004 · session $0.0021 · ctx 12%
 ```
@@ -54,7 +58,9 @@ Slash commands inside the REPL:
 /verify [model]   loop-1: a second model judges whether the last task was completed
 /compact [model]  summarize older turns to free context (also automatic at ~80% full;
                   the status line shows live usage: · ctx 34%)
-/save demo        name the session; resume later with `arnes --resume <id>`
+/save demo        name the session; resume later with /resume or `arnes resume demo`
+/resume [id|name] switch to another saved session without leaving the REPL
+                  (most recent other session when omitted; unique id prefixes work)
 /status           key limits + credit balance
 /clear            wipe history (keeps the session)
 /help /exit       (/quit and /q also exit)
@@ -207,11 +213,16 @@ ln -s "$(pwd)/.claude/skills/arnes" ~/.claude/skills/arnes
 
 ## Status
 
-v0.3 — dialect-native execution (`/messages`, `/responses`, per-model auto + `--dialect`),
-`--panel N` (parallel candidates, judge, labeled eval rows), eval framework (`arnes eval`,
-bash checks as ground truth), CI (macOS + Linux) with static Linux release binaries and a
-Terminal-Bench/Harbor adapter, on top of v0.2's interactive REPL (permission gating,
-mid-session `/model` swap, persistence + resume, coding tools, context compaction) and the
-v0.1 loop (inline verification, run records). MCP servers from `~/.arnes/mcp.json` plug
-their tools into the loop (`arnes mcp` to inspect). Next: subagents, cached model profiles.
-Roadmap in [DESIGN.md](DESIGN.md).
+v0.4 — eval lifecycle tooling (`arnes evals` history/capture/prune, `capture --split`
+session slicing), on top of v0.3's dialect-native execution (`/messages`, `/responses`,
+per-model auto + `--dialect`), `--panel N` (parallel candidates, judge, labeled eval rows),
+eval framework (`arnes eval`, bash checks as ground truth), and CI (macOS + Linux) with
+static Linux release binaries and a Terminal-Bench/Harbor adapter — all over v0.2's
+interactive REPL (permission gating, mid-session `/model` swap, persistence + resume,
+coding tools, context compaction) and the v0.1 loop (inline verification, run records).
+
+Unreleased since v0.4.1: MCP servers from `~/.arnes/mcp.json` plug their tools into the
+loop (`arnes mcp` to inspect), `arnes resume` + streaming markdown rendering, the
+session-start banner + `--version`, concise tool output with the Ctrl-O verbosity toggle,
+type-ahead queueing, and the anti-stall agent loop (continuation nudges + step-limit
+surfacing). Next: subagents, cached model profiles. Roadmap in [DESIGN.md](DESIGN.md).

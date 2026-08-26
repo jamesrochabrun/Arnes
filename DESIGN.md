@@ -77,7 +77,8 @@ ArnesKit  (library)   — Dialect, ModelProfile/ModelCatalog (+ fuzzy search), P
                         AgentTool + Permission, StreamAccumulator, Session (the loop),
                         Agent (headless wrapper), CodingTools (edit_file/grep/glob),
                         SessionStore/TranscriptEntry, RunRecord/RunRecordStore
-arnes     (executable) — interactive (default) · chat · do · models · status · runs · sessions
+arnes     (executable) — interactive (default) · chat · do · resume · models · status ·
+                        runs · sessions · eval · evals · probe · mcp
 ```
 
 Depends on [OpenRouterSwift](https://github.com/jamesrochabrun/OpenRouterSwift) (API client;
@@ -90,21 +91,34 @@ all three dialects already wrapped there). ArnesKit stays UI-free so native apps
 - **v0.2 (shipped):** interactive core — `Session`, REPL, permission gating, streaming,
   `/model` mid-session swap, session persistence/resume; coding tools (`edit_file`,
   `grep`, `glob`).
-- **v0.3 (in progress):**
-  - *Context compaction (shipped):* `usage.promptTokens` vs `profile.contextLength` drives an
+- **v0.3 (shipped):**
+  - *Context compaction:* `usage.promptTokens` vs `profile.contextLength` drives an
     auto-trigger at ~80% (plus manual `/compact [model]`): everything before the last user
     turn is summarized (router picks the summarizer by default), the summary rides the
     system prompt, and a `compaction` transcript entry makes it survive resume. The status
     line shows live context usage (`ctx N%`). OpenRouter's server-side `context-compression`
     plugin remains the alternative to evaluate.
-  - *Subagents:* a `subtask` tool = nested `Session` with its own `RunRecord`
-    (`parentSessionId`), fresh history, inherited permission delegate + allowlist.
   - *Dialect-native execution* for Anthropic (`/messages`) and OpenAI (`/responses`) under
-    `Session`; conformance probe; `--panel N` with worktree isolation; policy triggers.
-  - *MCP tool provider (shipped):* `MCPToolProvider` bridges stdio MCP servers into
+    `Session`, with the optimistic conformance probe (clean native steps record ok verdicts,
+    pre-output failures fall back to chat and are remembered); `--panel N` with snapshot
+    isolation and a judge model.
+- **v0.4 (shipped):** eval lifecycle tooling — `arnes evals` (history bars per suite ×
+  model × dialect), `evals capture` (writer model distills sessions or descriptions into
+  validated tasks; `--split` slices a session into a dataset), `evals prune`.
+- **Unreleased since v0.4.1:**
+  - *MCP tool provider:* `MCPToolProvider` bridges stdio MCP servers into
     `[any AgentTool]` — config at `~/.arnes/mcp.json` (Claude Desktop `mcpServers` shape,
     `ARNES_MCP_CONFIG` override), tools namespaced `mcp__<server>__<tool>` with schemas
     passed through, `.mutating` (gated) unless the server annotates `readOnlyHint`.
     `arnes mcp` inspects; `--no-mcp` opts out per run; panels stay MCP-free.
-- **v0.4:** scoreboard-driven routing defaults; pack-improvement proposals with A/B evals;
-  provider/ZDR/budget policy files.
+  - *REPL polish:* `arnes resume`, streaming markdown rendering, session-start banner +
+    `--version`, concise tool output with a Ctrl-O verbosity toggle, type-ahead queueing.
+  - *Anti-stall loop:* bounded continuation nudges when the model stops without a tool
+    call or a result; step-limit exhaustion surfaced instead of silent turn end.
+- **Next:**
+  - *Subagents:* a `subtask` tool = nested `Session` with its own `RunRecord`
+    (`parentSessionId`), fresh history, inherited permission delegate + allowlist.
+  - *Panel policy triggers* (e.g. auto-panel after verifier rejections) and cached model
+    profiles (the manifest is still fetched per process).
+  - Scoreboard-driven routing defaults; pack-improvement proposals with A/B evals;
+    provider/ZDR/budget policy files.

@@ -4,7 +4,7 @@ import Foundation
 import OpenRouterSwift
 
 /// Single source of truth for the CLI version — shown in the header and `--version`.
-let arnesVersion = "0.2.0"
+let arnesVersion = "0.4.1"
 
 // MARK: - Shared setup
 
@@ -150,6 +150,10 @@ struct Do: AsyncParsableCommand {
           print("⤵ \(dialect) dialect failed (\(reason.prefix(80))) — fell back to chat")
         case .compacted(let summarized, _):
           print("◈ compacted \(summarized) older messages")
+        case .nudged:
+          print("↻ paused without finishing — nudged to continue")
+        case .stepLimitReached(let maxSteps):
+          print("⚠ step limit (\(maxSteps)) reached before the task finished")
         case .textDelta, .reasoningDelta, .interrupted, .turnFinished:
           break // headless output prints whole messages and its own footer
         }

@@ -62,9 +62,10 @@ Sources/arnes/             # the CLI
   Interactive.swift        # REPL: turns, slash commands, SIGINT→cancel, TerminalPermissions
   Header.swift             # session-start banner box (model, dialect, cwd, MCP; plain line when piped)
   LineReader.swift         # raw-mode line editor + history (readLine() fallback when piped)
-  Renderer.swift           # AgentEvent → terminal; cost/route status line per turn
+  KeyWatcher.swift         # mid-turn stdin: Ctrl-O verbosity toggle, Ctrl-C cancel, type-ahead queue; feeds permission prompts
+  Renderer.swift           # AgentEvent → terminal; concise tool lines (Ctrl-O for verbose); cost/route status line per turn
   Markdown.swift           # StreamingMarkdown: delta stream → styled prose/headings/bullets + fenced code with Splash highlighting
-  SlashCommand.swift       # /model /cost /verify /save /clear /status /help /exit
+  SlashCommand.swift       # /model /cost /verify /compact /save /resume /clear /status /help /exit
   ANSI.swift               # styling, TTY-gated
 ```
 

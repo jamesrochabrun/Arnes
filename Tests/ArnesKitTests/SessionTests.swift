@@ -293,6 +293,110 @@ final class SessionTests: XCTestCase {
     XCTAssertTrue(records.allSatisfy(\.finished))
   }
 
+  func testStallingReplyIsNudgedBackIntoTheLoop() async throws {
+    let mock = MockOpenRouterService()
+    mock.manifestJSON = Fixtures.manifest(Fixtures.manifestModel(id: "test/model"))
+    mock.chunkScripts = [
+      // Stall: narrates intent instead of calling the tool.
+      [Fixtures.textChunk("Let me check the file next."), Fixtures.usageChunk(cost: 0.01)],
+      // After the nudge, it actually works…
+      [Fixtures.toolCallChunk(id: "c1", name: "spy", arguments: "{}"), Fixtures.usageChunk(cost: 0.01)],
+      // …and finishes.
+      [Fixtures.textChunk("Done. Updated the file."), Fixtures.usageChunk(cost: 0.01)],
+    ]
+    let spy = SpyTool(permission: .readOnly)
+    let session = Session(
+      service: mock,
+      tools: [spy],
+      store: tempRecordStore(),
+      configuration: .init(model: "test/model"))
+
+    let events = try await drain(await session.send("fix it"))
+
+    XCTAssertTrue(events.contains { if case .nudged = $0 { return true } else { return false } })
+    XCTAssertEqual(spy.executions.count, 1)
+    let maybeRecord = await session.lastRecord
+    let record = try XCTUnwrap(maybeRecord)
+    XCTAssertTrue(record.finished)
+    XCTAssertEqual(record.steps, 3)
+    // The nudge rode the history as a user message so the model saw it.
+    let nudgeRequest = mock.requests[1]
+    XCTAssertEqual(nudgeRequest.messages.last?.role, .user)
+    XCTAssertTrue(nudgeRequest.messages.last?.content?.testText.contains("without a tool call") == true)
+  }
+
+  func testNudgesAreBoundedSoAStubbornModelStillFinishes() async throws {
+    let mock = MockOpenRouterService()
+    mock.manifestJSON = Fixtures.manifest(Fixtures.manifestModel(id: "test/model"))
+    mock.chunkScripts = [
+      [Fixtures.textChunk("I'll start by looking around."), Fixtures.usageChunk(cost: 0.01)],
+      [Fixtures.textChunk("Now I will inspect the code."), Fixtures.usageChunk(cost: 0.01)],
+      [Fixtures.textChunk("Next I plan to read the file."), Fixtures.usageChunk(cost: 0.01)],
+    ]
+    let session = Session(
+      service: mock,
+      tools: [SpyTool(permission: .readOnly)],
+      store: tempRecordStore(),
+      configuration: .init(model: "test/model"))
+
+    let events = try await drain(await session.send("go"))
+
+    let nudges = events.filter { if case .nudged = $0 { return true } else { return false } }
+    XCTAssertEqual(nudges.count, 2)
+    XCTAssertEqual(mock.requests.count, 3)
+    let maybeRecord = await session.lastRecord
+    let record = try XCTUnwrap(maybeRecord)
+    XCTAssertTrue(record.finished)
+  }
+
+  func testCompleteReplyIsNotNudged() async throws {
+    let mock = MockOpenRouterService()
+    mock.manifestJSON = Fixtures.manifest(Fixtures.manifestModel(id: "test/model"))
+    mock.chunkScripts = [
+      [Fixtures.textChunk("The task is complete. I renamed the symbol in both files."), Fixtures.usageChunk(cost: 0.01)],
+    ]
+    let session = Session(
+      service: mock,
+      tools: [SpyTool(permission: .readOnly)],
+      store: tempRecordStore(),
+      configuration: .init(model: "test/model"))
+
+    let events = try await drain(await session.send("rename it"))
+
+    XCTAssertFalse(events.contains { if case .nudged = $0 { return true } else { return false } })
+    XCTAssertEqual(mock.requests.count, 1)
+  }
+
+  func testStepLimitExhaustionIsSurfaced() async throws {
+    let mock = MockOpenRouterService()
+    mock.manifestJSON = Fixtures.manifest(Fixtures.manifestModel(id: "test/model"))
+    mock.chunkScripts = [
+      [Fixtures.toolCallChunk(id: "c1", name: "spy", arguments: "{}"), Fixtures.usageChunk(cost: 0.01)],
+    ]
+    let session = Session(
+      service: mock,
+      tools: [SpyTool(permission: .readOnly)],
+      store: tempRecordStore(),
+      configuration: .init(model: "test/model", maxStepsPerTurn: 1))
+
+    let events = try await drain(await session.send("go"))
+
+    XCTAssertTrue(events.contains { if case .stepLimitReached = $0 { return true } else { return false } })
+    let maybeRecord = await session.lastRecord
+    let record = try XCTUnwrap(maybeRecord)
+    XCTAssertFalse(record.finished)
+  }
+
+  func testLooksUnfinishedHeuristic() {
+    XCTAssertTrue(Session.looksUnfinished(""))
+    XCTAssertTrue(Session.looksUnfinished("I found the bug. Now to fix it:"))
+    XCTAssertTrue(Session.looksUnfinished("Let me check the tests"))
+    XCTAssertTrue(Session.looksUnfinished("The switch is wrong. I'll fix ThreadScreen now."))
+    XCTAssertFalse(Session.looksUnfinished("Renamed the symbol in both files."))
+    XCTAssertFalse(Session.looksUnfinished("Done. Let me know if you need anything else."))
+    XCTAssertFalse(Session.looksUnfinished("The fix is in place and the tests pass."))
+  }
+
   func testAgentRunWrapsSessionAndLandsVerifierInRecord() async throws {
     let mock = MockOpenRouterService()
     mock.manifestJSON = Fixtures.manifest(Fixtures.manifestModel(id: "test/model"))
