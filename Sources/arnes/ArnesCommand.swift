@@ -4,7 +4,7 @@ import Foundation
 import OpenRouterSwift
 
 /// Single source of truth for the CLI version — shown in the header and `--version`.
-let arnesVersion = "0.4.1"
+let arnesVersion = "0.5.0"
 
 // MARK: - Shared setup
 
