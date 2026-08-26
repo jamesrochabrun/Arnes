@@ -6,8 +6,9 @@ description: Drive the arnes CLI (model-adaptive agent harness on OpenRouter) �
 # Driving arnes
 
 `arnes` is an installed CLI (`arnes --help` to confirm; if missing, build with
-`./scripts/install.sh` from the repo root). Every command needs `OPENROUTER_API_KEY`
-in the environment — if unset, ask the user to provide it or source their shell profile.
+`./scripts/install.sh` from the repo root). Every command needs an OpenRouter key:
+`OPENROUTER_API_KEY` in the environment, or a `~/.arnes/credentials` file (the key on one
+line). If neither is set, ask the user to provide it.
 All commands are safe to run non-interactively **except** bare `arnes` (the REPL), which
 prompts for tool permissions — prefer `arnes do` for headless work.
 
