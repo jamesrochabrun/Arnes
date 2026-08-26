@@ -190,6 +190,13 @@ struct Interactive: AsyncParsableCommand {
     sigintSource.setEventHandler { interrupts.interrupt() }
     sigintSource.resume()
 
+    // Window resizes redraw the bar at the new size and re-pin it to the bottom.
+    signal(SIGWINCH, SIG_IGN)
+    let sigwinchSource = DispatchSource.makeSignalSource(signal: SIGWINCH, queue: .global())
+    sigwinchSource.setEventHandler { screen.handleResize() }
+    sigwinchSource.resume()
+    defer { sigwinchSource.cancel() }
+
     let reader = LineReader(
       historyURL: URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".arnes/history"))
     reader.screen = screen
@@ -212,7 +219,9 @@ struct Interactive: AsyncParsableCommand {
     keys.onCtrlO = toggleVerbosity
     keys.onInterrupt = { interrupts.interrupt() }
     keys.onTypeahead = { fragment, queued in screen.setTypeahead(fragment, queued: queued) }
+    keys.onCursorReport = { row in screen.reportCursorRow(row) }
     reader.onCtrlO = toggleVerbosity
+    reader.onCursorReport = { row in screen.reportCursorRow(row) }
 
     // Typing during a turn queues input: completed lines (Enter pressed) run as the
     // next messages in order, an unfinished fragment pre-fills the next prompt.

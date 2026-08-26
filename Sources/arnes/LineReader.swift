@@ -16,6 +16,16 @@ final class LineReader {
   /// instead of inline, and notices go through the screen so the box stays below them.
   var screen: Screen?
 
+  /// A DSR cursor-position report arrived while this reader owned stdin (the screen
+  /// requests one after a resize) — forwards the 1-based row.
+  var onCursorReport: ((Int) -> Void)?
+
+  /// Row from CSI params ("row;col").
+  static func reportRow(_ params: [UInt8]) -> Int? {
+    let text = String(decoding: params, as: UTF8.self)
+    return Int(text.prefix(while: { $0.isNumber }))
+  }
+
   private var usesScreen: Bool { screen?.isActive == true }
 
   private let historyURL: URL?
@@ -155,8 +165,20 @@ final class LineReader {
         redraw()
 
       case 0x1B: // escape sequence
-        guard readByte() == UInt8(ascii: "["), let code = readByte() else { continue }
-        switch code {
+        guard readByte() == UInt8(ascii: "[") else { continue }
+        // Full CSI parse: parameter bytes until the final byte (0x40–0x7E), so
+        // multi-byte sequences (delete, cursor-position reports) never leak into
+        // the buffer as text.
+        var params: [UInt8] = []
+        var final: UInt8?
+        while let next = readByte() {
+          if (0x40...0x7E).contains(next) {
+            final = next
+            break
+          }
+          params.append(next)
+        }
+        switch final {
         case UInt8(ascii: "A"): // up — history back
           if historyIndex > 0 {
             if historyIndex == history.count { pendingLine = buffer }
@@ -182,11 +204,14 @@ final class LineReader {
             cursor -= 1
             redraw()
           }
-        case UInt8(ascii: "3"): // delete key: ESC [ 3 ~
-          _ = readByte()
+        case UInt8(ascii: "~") where params == [UInt8(ascii: "3")]: // delete key
           if cursor < buffer.count {
             buffer.remove(at: cursor)
             redraw()
+          }
+        case UInt8(ascii: "R"): // cursor-position report (row;col) — for the screen
+          if let row = Self.reportRow(params) {
+            onCursorReport?(row)
           }
         default:
           continue

@@ -23,6 +23,9 @@ final class KeyWatcher: @unchecked Sendable {
   /// last Enter) and how many completed lines are queued — lets the pinned input box
   /// show what's being typed mid-turn instead of buffering it blind.
   var onTypeahead: (@Sendable (String, Int) -> Void)?
+  /// A DSR cursor-position report arrived mid-turn (the screen requests one after a
+  /// resize) — forwards the 1-based row.
+  var onCursorReport: (@Sendable (Int) -> Void)?
 
   private let lock = NSLock()
   private var active = false
@@ -34,6 +37,8 @@ final class KeyWatcher: @unchecked Sendable {
   private var typeahead: [UInt8] = []
   private enum EscapeState { case none, sawEscape, inSequence }
   private var escapeState = EscapeState.none
+  private var escapeParams: [UInt8] = []
+  private var escapeIsCSI = false
 
   var isActive: Bool {
     lock.withLock { active }
@@ -113,8 +118,13 @@ final class KeyWatcher: @unchecked Sendable {
       case 0x03: // Ctrl-C
         onInterrupt?()
       default:
-        if let state = bufferTypeahead(byte) {
-          onTypeahead?(state.fragment, state.queued)
+        switch bufferTypeahead(byte) {
+        case .changed(let fragment, let queued):
+          onTypeahead?(fragment, queued)
+        case .cursorReport(let row):
+          onCursorReport?(row)
+        case .none:
+          break
         }
       }
     }
@@ -131,9 +141,15 @@ final class KeyWatcher: @unchecked Sendable {
     }
   }
 
-  /// Returns the buffer's new (fragment, queued-line count) when it changed, so the
-  /// caller can notify `onTypeahead` outside the lock.
-  private func bufferTypeahead(_ byte: UInt8) -> (fragment: String, queued: Int)? {
+  private enum TypeaheadEvent {
+    case none
+    case changed(fragment: String, queued: Int)
+    case cursorReport(row: Int)
+  }
+
+  /// Returns what the byte amounted to — a type-ahead change, a captured DSR
+  /// cursor-position report, or nothing — so the caller can notify outside the lock.
+  private func bufferTypeahead(_ byte: UInt8) -> TypeaheadEvent {
     lock.lock()
     defer { lock.unlock() }
     // Swallow escape sequences (arrows, etc.) — they'd land as garbage in the text.
@@ -141,20 +157,28 @@ final class KeyWatcher: @unchecked Sendable {
     case .sawEscape:
       // "[" (CSI) and "O" (SS3) open multi-byte sequences; anything else was a
       // two-byte Alt+key pair that ends here.
-      escapeState = (byte == UInt8(ascii: "[") || byte == UInt8(ascii: "O")) ? .inSequence : .none
-      return nil
+      escapeIsCSI = byte == UInt8(ascii: "[")
+      escapeState = (escapeIsCSI || byte == UInt8(ascii: "O")) ? .inSequence : .none
+      escapeParams = []
+      return .none
     case .inSequence:
       if (0x40...0x7E).contains(byte) {
         escapeState = .none
+        // ESC [ row ; col R — the terminal answering the screen's resize query.
+        if escapeIsCSI, byte == UInt8(ascii: "R"), let row = LineReader.reportRow(escapeParams) {
+          return .cursorReport(row: row)
+        }
+      } else {
+        escapeParams.append(byte)
       }
-      return nil
+      return .none
     case .none:
       break
     }
     switch byte {
     case 0x1B:
       escapeState = .sawEscape
-      return nil
+      return .none
     case 0x0A, 0x0D: // enter — completes a queued line
       typeahead.append(0x0A)
     case 0x7F, 0x08: // backspace — undo the last typed character
@@ -165,13 +189,13 @@ final class KeyWatcher: @unchecked Sendable {
         typeahead.removeLast()
       }
     case 0x00..<0x20:
-      return nil // other control keys aren't text
+      return .none // other control keys aren't text
     default:
       typeahead.append(byte)
     }
     let lastNewline = typeahead.lastIndex(of: 0x0A)
     let fragmentBytes = lastNewline.map { Array(typeahead[typeahead.index(after: $0)...]) } ?? typeahead
     let queued = typeahead.reduce(0) { $1 == 0x0A ? $0 + 1 : $0 }
-    return (String(decoding: fragmentBytes, as: UTF8.self), queued)
+    return .changed(fragment: String(decoding: fragmentBytes, as: UTF8.self), queued: queued)
   }
 }

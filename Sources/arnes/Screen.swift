@@ -28,8 +28,13 @@ final class Screen: @unchecked Sendable {
   private var cursor = 0
   private var queued = 0        // completed type-ahead lines waiting to run
   private var placeholder = Screen.idlePlaceholder
-  private var regionRows = 0    // rows the bar region currently occupies on screen
-  private var parkRow = 0       // row within the region where the cursor is parked
+  /// Visible width of each region line as last drawn — erasing recomputes how many
+  /// physical rows each occupies at the *current* width, so a resize that rewrapped
+  /// them (terminal reflow) is healed instead of corrupting the cursor math.
+  private var drawnWidths: [Int] = []
+  private var parkIndex = 0     // region line the cursor is parked on
+  private var parkColumn = 0    // 0-based column of the parked cursor
+  private var measurePending = false
   private var closed = false
   /// 1-based screen row where the next transcript line lands (the region's top).
   /// Measured once via DSR at startup, then tracked from what we write; <= 0 means
@@ -171,15 +176,38 @@ final class Screen: @unchecked Sendable {
     lock.lock()
     defer { lock.unlock() }
     guard !closed else { return }
-    if regionRows > 0 {
-      var out = ""
-      if parkRow > 0 { out += "\u{1B}[\(parkRow)A" }
-      out += "\r\u{1B}[J"
-      write(out)
-      regionRows = 0
-      parkRow = 0
-    }
+    write(eraseRegion(columns: max(20, Self.terminalColumns)))
     closed = true
+  }
+
+  /// The window changed size: redraw at the new dimensions (the wrap-aware erase
+  /// heals reflowed lines), then ask the terminal where the cursor landed so the
+  /// bar can re-pin to the new bottom. The DSR reply arrives on stdin and is fed
+  /// back through `reportCursorRow` by whichever key reader is active.
+  func handleResize() {
+    guard isActive, !closed else { return }
+    lock.lock()
+    defer { lock.unlock() }
+    transcriptRow = 0 // unknown until the terminal answers
+    repaint()
+    guard !drawnWidths.isEmpty else { return }
+    measurePending = true
+    write("\u{1B}[6n")
+  }
+
+  /// A cursor-position report reached one of the input readers.
+  func reportCursorRow(_ row: Int) {
+    guard isActive, !closed else { return }
+    lock.lock()
+    defer { lock.unlock() }
+    guard measurePending, row > 0 else { return }
+    measurePending = false
+    // The cursor is parked `parkIndex` freshly-drawn (single-row) lines below the
+    // region top, which is where the next transcript line lands.
+    transcriptRow = max(1, row - parkIndex)
+    if !drawnWidths.isEmpty {
+      repaint() // apply bottom-pinning padding at the new size
+    }
   }
 
   // MARK: Drawing
@@ -187,15 +215,9 @@ final class Screen: @unchecked Sendable {
   /// One write per update: erase the old region, print committed lines permanently,
   /// redraw the region below them, park the cursor at the input position.
   private func repaint(commit: [String] = []) {
-    var out = ""
-    if regionRows > 0 {
-      if parkRow > 0 { out += "\u{1B}[\(parkRow)A" }
-      out += "\r\u{1B}[J"
-      regionRows = 0
-      parkRow = 0
-    }
     let columns = max(20, Self.terminalColumns)
     let screenRows = Self.terminalRows
+    var out = eraseRegion(columns: columns)
     for line in commit {
       out += line + "\n"
       if transcriptRow > 0 {
@@ -206,13 +228,18 @@ final class Screen: @unchecked Sendable {
     }
 
     var lines: [String] = []
+    var widths: [Int] = []
     var inputRow: Int?
     var inputColumn = 0
     if !partial.isEmpty {
-      lines.append(ANSIText.clampTail(partial, to: columns - 1) + "\u{1B}[0m")
+      let clamped = ANSIText.clampTail(partial, to: columns - 1) + "\u{1B}[0m"
+      lines.append(clamped)
+      widths.append(ANSIText.visibleCount(clamped))
     }
     if let status {
-      lines.append(ANSIText.clampTail(status, to: columns - 1) + "\u{1B}[0m")
+      let clamped = ANSIText.clampTail(status, to: columns - 1) + "\u{1B}[0m"
+      lines.append(clamped)
+      widths.append(ANSIText.visibleCount(clamped))
     }
     if showBox {
       let inner = columns - 4 // "│ " … " │"
@@ -224,6 +251,7 @@ final class Screen: @unchecked Sendable {
       inputRow = lines.count
       lines.append(view)
       lines.append(ANSI.accent("╰" + String(repeating: "─", count: columns - 2) + "╯"))
+      widths.append(contentsOf: [columns, columns, columns])
     }
 
     if !lines.isEmpty {
@@ -246,13 +274,32 @@ final class Screen: @unchecked Sendable {
       if let inputRow {
         if last - inputRow > 0 { out += "\u{1B}[\(last - inputRow)A" }
         out += "\u{1B}[\(inputColumn + 1)G"
-        parkRow = inputRow
+        parkIndex = inputRow
+        parkColumn = inputColumn
       } else {
-        parkRow = last
+        parkIndex = last
+        parkColumn = widths[last]
       }
-      regionRows = lines.count
+      drawnWidths = widths
     }
     write(out)
+  }
+
+  /// Moves from the parked cursor to the region's top row and clears everything below.
+  /// Row counts are recomputed from each drawn line's width at the current terminal
+  /// width, so lines the terminal rewrapped after a resize are still fully erased.
+  private func eraseRegion(columns: Int) -> String {
+    guard !drawnWidths.isEmpty else { return "" }
+    var up = parkColumn / columns // wrapped segments of the park line above the cursor
+    for index in 0..<parkIndex {
+      up += max(1, (drawnWidths[index] + columns - 1) / columns)
+    }
+    var out = up > 0 ? "\u{1B}[\(up)A" : ""
+    out += "\r\u{1B}[J"
+    drawnWidths = []
+    parkIndex = 0
+    parkColumn = 0
+    return out
   }
 
   /// The box's middle row and the 0-based screen column for the cursor. Long input
