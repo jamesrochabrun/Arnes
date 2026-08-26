@@ -19,6 +19,10 @@ import Glibc
 final class KeyWatcher: @unchecked Sendable {
   var onCtrlO: (@Sendable () -> Void)?
   var onInterrupt: (@Sendable () -> Void)?
+  /// Fires after every type-ahead change with the unfinished fragment (text after the
+  /// last Enter) and how many completed lines are queued — lets the pinned input box
+  /// show what's being typed mid-turn instead of buffering it blind.
+  var onTypeahead: (@Sendable (String, Int) -> Void)?
 
   private let lock = NSLock()
   private var active = false
@@ -109,7 +113,9 @@ final class KeyWatcher: @unchecked Sendable {
       case 0x03: // Ctrl-C
         onInterrupt?()
       default:
-        bufferTypeahead(byte)
+        if let state = bufferTypeahead(byte) {
+          onTypeahead?(state.fragment, state.queued)
+        }
       }
     }
   }
@@ -125,7 +131,9 @@ final class KeyWatcher: @unchecked Sendable {
     }
   }
 
-  private func bufferTypeahead(_ byte: UInt8) {
+  /// Returns the buffer's new (fragment, queued-line count) when it changed, so the
+  /// caller can notify `onTypeahead` outside the lock.
+  private func bufferTypeahead(_ byte: UInt8) -> (fragment: String, queued: Int)? {
     lock.lock()
     defer { lock.unlock() }
     // Swallow escape sequences (arrows, etc.) — they'd land as garbage in the text.
@@ -134,18 +142,19 @@ final class KeyWatcher: @unchecked Sendable {
       // "[" (CSI) and "O" (SS3) open multi-byte sequences; anything else was a
       // two-byte Alt+key pair that ends here.
       escapeState = (byte == UInt8(ascii: "[") || byte == UInt8(ascii: "O")) ? .inSequence : .none
-      return
+      return nil
     case .inSequence:
       if (0x40...0x7E).contains(byte) {
         escapeState = .none
       }
-      return
+      return nil
     case .none:
       break
     }
     switch byte {
     case 0x1B:
       escapeState = .sawEscape
+      return nil
     case 0x0A, 0x0D: // enter — completes a queued line
       typeahead.append(0x0A)
     case 0x7F, 0x08: // backspace — undo the last typed character
@@ -156,9 +165,13 @@ final class KeyWatcher: @unchecked Sendable {
         typeahead.removeLast()
       }
     case 0x00..<0x20:
-      break // other control keys aren't text
+      return nil // other control keys aren't text
     default:
       typeahead.append(byte)
     }
+    let lastNewline = typeahead.lastIndex(of: 0x0A)
+    let fragmentBytes = lastNewline.map { Array(typeahead[typeahead.index(after: $0)...]) } ?? typeahead
+    let queued = typeahead.reduce(0) { $1 == 0x0A ? $0 + 1 : $0 }
+    return (String(decoding: fragmentBytes, as: UTF8.self), queued)
   }
 }

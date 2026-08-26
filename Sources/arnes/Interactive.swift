@@ -16,24 +16,39 @@ struct TerminalPermissions: PermissionDelegate {
   /// While a turn streams, the key watcher owns stdin — the y/n/a keypress must
   /// come through it, or two blocking readers would steal each other's bytes.
   let keys: KeyWatcher?
+  /// Routes the question above the pinned input box; nil prints inline (headless paths).
+  let screen: Screen?
 
-  init(spinner: Spinner? = nil, keys: KeyWatcher? = nil) {
+  init(spinner: Spinner? = nil, keys: KeyWatcher? = nil, screen: Screen? = nil) {
     self.spinner = spinner
     self.keys = keys
+    self.screen = screen
   }
 
   func decide(toolName: String, summary: String, argumentsJSON: String) async -> PermissionDecision {
     spinner?.stop()
-    print("\n" + ANSI.yellow("⚠ \(summary)"))
-    print("  allow? [y]es · [n]o · [a]lways this session: ", terminator: "")
-    fflush(stdout)
+    let question = "allow? [y]es · [n]o · [a]lways this session"
+    let pinned = screen?.isActive == true
+    if pinned, let screen {
+      screen.print(ANSI.yellow("⚠ \(summary)"))
+      screen.setStatus(ANSI.bold(question) + " ")
+    } else {
+      print("\n" + ANSI.yellow("⚠ \(summary)"))
+      print("  \(question): ", terminator: "")
+      fflush(stdout)
+    }
     let answer: String?
     if let keys, keys.isActive {
       answer = await keys.readKey()
     } else {
       answer = Self.readKey()
     }
-    print(answer ?? "")
+    if pinned, let screen {
+      screen.setStatus(nil)
+      screen.print(ANSI.dim("  \(question): ") + (answer ?? ""))
+    } else {
+      print(answer ?? "")
+    }
     switch answer?.lowercased() {
     case "y":
       spinner?.start("running \(toolName)")
@@ -119,9 +134,15 @@ struct Interactive: AsyncParsableCommand {
     let sessionStore = SessionStore()
     let spinner = Spinner()
     let keys = KeyWatcher()
+    // The pinned bottom bar: transcript scrolls above it, input/status stay below.
+    // Inactive when either fd is piped, leaving output identical to plain printing.
+    let screen = Screen()
+    if screen.isActive {
+      spinner.sink = { screen.setStatus($0) }
+    }
     let permissions: any PermissionDelegate = safe
       ? DenyMutationsPermissions()
-      : TerminalPermissions(spinner: spinner, keys: keys)
+      : TerminalPermissions(spinner: spinner, keys: keys, screen: screen)
     let fallbacks = fallback.split(separator: ",").map(String.init)
     let requested = try loadSessionIfRequested(store: sessionStore)
     let mcp = await MCPSetup.connect(enabled: !noMcp, spinner: spinner, quiet: true)
@@ -138,7 +159,7 @@ struct Interactive: AsyncParsableCommand {
         sessionStore: sessionStore,
         configuration: Session.Configuration(model: loaded.model, fallbackModels: fallbacks))
       let label = loaded.meta.name ?? loaded.meta.id
-      print(Header.banner(
+      screen.print(Header.banner(
         version: arnesVersion,
         model: loaded.model,
         dialect: "auto",
@@ -152,7 +173,7 @@ struct Interactive: AsyncParsableCommand {
         permissions: permissions,
         sessionStore: sessionStore,
         configuration: Session.Configuration(model: model, fallbackModels: fallbacks))
-      print(Header.banner(
+      screen.print(Header.banner(
         version: arnesVersion,
         model: model,
         dialect: "auto",
@@ -170,19 +191,26 @@ struct Interactive: AsyncParsableCommand {
 
     let reader = LineReader(
       historyURL: URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".arnes/history"))
-    let renderer = Renderer()
+    reader.screen = screen
+    let renderer = Renderer(screen: screen.isActive ? screen : nil)
 
     // Ctrl-O toggles concise/verbose tool output — mid-turn via the key watcher,
     // at the prompt via the line reader.
     let toggleVerbosity: @Sendable () -> Void = {
       spinner.stop()
       let on = renderer.toggleVerbose()
-      print("\r\u{1B}[K" + ANSI.dim(on
+      let notice = ANSI.dim(on
         ? "◐ verbose tool output — ctrl+o to condense"
-        : "◑ concise tool output — ctrl+o for full arguments"))
+        : "◑ concise tool output — ctrl+o for full arguments")
+      if screen.isActive {
+        screen.print(notice)
+      } else {
+        print("\r\u{1B}[K" + notice)
+      }
     }
     keys.onCtrlO = toggleVerbosity
     keys.onInterrupt = { interrupts.interrupt() }
+    keys.onTypeahead = { fragment, queued in screen.setTypeahead(fragment, queued: queued) }
     reader.onCtrlO = toggleVerbosity
 
     // Typing during a turn queues input: completed lines (Enter pressed) run as the
@@ -201,40 +229,46 @@ struct Interactive: AsyncParsableCommand {
     }
 
     if let prompt {
-      print("› \(prompt)")
-      await runTurn(prompt, session: session, renderer: renderer, interrupts: interrupts, spinner: spinner, keys: keys)
+      screen.print("› \(prompt)")
+      await runTurn(prompt, session: session, renderer: renderer, interrupts: interrupts, spinner: spinner, keys: keys, screen: screen)
       absorbTypeahead()
     }
 
     while true {
       let text: String
+      var echoed = false
       if !queued.isEmpty {
         text = queued.removeFirst()
-        print("› \(text)") // echo what was typed blind during the turn
+        screen.print("› \(text)") // echo the line typed during the previous turn
+        echoed = true
       } else {
         guard let line = reader.readLine(prompt: "› ", initial: prefill) else { break }
         prefill = ""
         text = line.trimmingCharacters(in: .whitespaces)
       }
       if text.isEmpty { continue }
+      if screen.isActive, !echoed {
+        screen.print("› \(text)") // the box cleared on submit; keep the line in the transcript
+      }
       if let command = SlashCommand.parse(text) {
         // /resume swaps the live session, so it's handled here where `session` is ours.
         if case .resume(let query) = command {
           if let switched = await resumeSession(
             query, currentId: session.id, service: service, tools: tools,
-            permissions: permissions, sessionStore: sessionStore, fallbacks: fallbacks)
+            permissions: permissions, sessionStore: sessionStore, fallbacks: fallbacks, screen: screen)
           {
             session = switched
           }
           continue
         }
-        if await handle(command, session: session, spinner: spinner) { break }
+        if await handle(command, session: session, spinner: spinner, screen: screen) { break }
         continue
       }
-      await runTurn(text, session: session, renderer: renderer, interrupts: interrupts, spinner: spinner, keys: keys)
+      await runTurn(text, session: session, renderer: renderer, interrupts: interrupts, spinner: spinner, keys: keys, screen: screen)
       absorbTypeahead()
     }
     await mcp.provider.shutdown()
+    screen.close()
     print(ANSI.dim("session \(session.id.prefix(8))… · total \(Renderer.usd(await session.costUSD))"))
   }
 
@@ -246,12 +280,17 @@ struct Interactive: AsyncParsableCommand {
     renderer: Renderer,
     interrupts: InterruptController,
     spinner: Spinner,
-    keys: KeyWatcher)
+    keys: KeyWatcher,
+    screen: Screen)
     async
   {
     renderer.beginTurn()
     keys.start()
-    defer { keys.stop() }
+    screen.setPlaceholder(Screen.busyPlaceholder)
+    defer {
+      keys.stop()
+      screen.setPlaceholder(Screen.idlePlaceholder)
+    }
     let task = Task {
       spinner.start("waiting for model")
       do {
@@ -264,7 +303,7 @@ struct Interactive: AsyncParsableCommand {
         }
       } catch {
         spinner.stop()
-        print(ANSI.red("error: \(error)"))
+        screen.print(ANSI.red("error: \(error)"))
       }
       spinner.stop()
     }
@@ -292,13 +331,13 @@ struct Interactive: AsyncParsableCommand {
   // MARK: Slash commands
 
   /// Returns true when the REPL should exit.
-  private func handle(_ command: SlashCommand, session: Session, spinner: Spinner) async -> Bool {
+  private func handle(_ command: SlashCommand, session: Session, spinner: Spinner, screen: Screen) async -> Bool {
     switch command {
     case .model(let query):
-      await handleModel(query, session: session, spinner: spinner)
+      await handleModel(query, session: session, spinner: spinner, screen: screen)
 
     case .cost:
-      print("session \(Renderer.usd(await session.costUSD))")
+      screen.print("session \(Renderer.usd(await session.costUSD))")
 
     case .verify(let verifier):
       spinner.start("verifying")
@@ -306,13 +345,13 @@ struct Interactive: AsyncParsableCommand {
       do {
         let (passed, verdict) = try await session.verifyLastTurn(model: verifier ?? "openrouter/auto")
         spinner.stop()
-        print(passed ? ANSI.green("✔ \(verdict)") : ANSI.red("✘ \(verdict)"))
+        screen.print(passed ? ANSI.green("✔ \(verdict)") : ANSI.red("✘ \(verdict)"))
       } catch SessionError.nothingToVerify {
         spinner.stop()
-        print(ANSI.dim("nothing to verify yet — send a message first"))
+        screen.print(ANSI.dim("nothing to verify yet — send a message first"))
       } catch {
         spinner.stop()
-        print(ANSI.red("verify failed: \(error)"))
+        screen.print(ANSI.red("verify failed: \(error)"))
       }
 
     case .compact(let summarizer):
@@ -322,15 +361,15 @@ struct Interactive: AsyncParsableCommand {
         let result = try await session.compact(with: summarizer)
         spinner.stop()
         if result.summarizedMessages == 0 {
-          print(ANSI.dim("nothing to compact yet — only the current turn is in context"))
+          screen.print(ANSI.dim("nothing to compact yet — only the current turn is in context"))
         } else {
-          print(ANSI.dim(
+          screen.print(ANSI.dim(
             "◈ compacted \(result.summarizedMessages) messages into a summary · "
               + "\(result.keptMessages) kept · cost \(Renderer.usd(result.costUSD))"))
         }
       } catch {
         spinner.stop()
-        print(ANSI.red("compact failed: \(error)"))
+        screen.print(ANSI.red("compact failed: \(error)"))
       }
 
     case .save(let name):
@@ -339,9 +378,9 @@ struct Interactive: AsyncParsableCommand {
       let resolved = name ?? "session-\(formatter.string(from: Date()))"
       do {
         try await session.save(name: resolved)
-        print("saved as \(ANSI.bold(resolved)) — resume with: arnes resume \(resolved)")
+        screen.print("saved as \(ANSI.bold(resolved)) — resume with: arnes resume \(resolved)")
       } catch {
-        print(ANSI.red("save failed: \(error)"))
+        screen.print(ANSI.red("save failed: \(error)"))
       }
 
     case .resume:
@@ -349,20 +388,20 @@ struct Interactive: AsyncParsableCommand {
 
     case .clear:
       await session.clearHistory()
-      print(ANSI.dim("history cleared"))
+      screen.print(ANSI.dim("history cleared"))
 
     case .status:
       let id = session.id
       let model = await session.model
       let messages = await session.messageCount
       let cost = await session.costUSD
-      print("session \(id)\nmodel   \(model)\nmessages \(messages)\ncost    \(Renderer.usd(cost))")
+      screen.print("session \(id)\nmodel   \(model)\nmessages \(messages)\ncost    \(Renderer.usd(cost))")
 
     case .help:
-      print(SlashCommand.helpText)
+      screen.print(SlashCommand.helpText)
 
     case .unknown(let name):
-      print(ANSI.dim("unknown command /\(name)\n") + SlashCommand.helpText)
+      screen.print(ANSI.dim("unknown command /\(name)\n") + SlashCommand.helpText)
 
     case .exit:
       return true
@@ -370,9 +409,9 @@ struct Interactive: AsyncParsableCommand {
     return false
   }
 
-  private func handleModel(_ query: String?, session: Session, spinner: Spinner) async {
+  private func handleModel(_ query: String?, session: Session, spinner: Spinner, screen: Screen) async {
     guard let query else {
-      print("model \(ANSI.bold(await session.model))\n" + ANSI.dim("switch with /model <query>, e.g. /model sonnet"))
+      screen.print("model \(ANSI.bold(await session.model))\n" + ANSI.dim("switch with /model <query>, e.g. /model sonnet"))
       return
     }
     spinner.start("searching models")
@@ -381,7 +420,7 @@ struct Interactive: AsyncParsableCommand {
       let results = try await session.searchModels(query, limit: 8)
       spinner.stop()
       guard let best = results.first else {
-        print(ANSI.dim("no models match \"\(query)\" — try `arnes models \(query)`"))
+        screen.print(ANSI.dim("no models match \"\(query)\" — try `arnes models \(query)`"))
         return
       }
       if results.count == 1 || best.id.lowercased() == query.lowercased() {
@@ -393,21 +432,21 @@ struct Interactive: AsyncParsableCommand {
         if let price = profile.promptPricePerToken {
           line += ANSI.dim(String(format: " · in $%.2f/Mtok", price * 1_000_000))
         }
-        print(line)
+        screen.print(line)
         if !profile.supportsTools {
-          print(ANSI.yellow("⚠ \(profile.id) does not support tools — the agent loop will be chat-only"))
+          screen.print(ANSI.yellow("⚠ \(profile.id) does not support tools — the agent loop will be chat-only"))
         }
       } else {
-        print(ANSI.dim("matches:"))
+        screen.print(ANSI.dim("matches:"))
         for profile in results {
           let context = profile.contextLength.map { "\($0 / 1000)k" } ?? "?"
-          print("  \(profile.id)  \(ANSI.dim("ctx \(context)"))")
+          screen.print("  \(profile.id)  \(ANSI.dim("ctx \(context)"))")
         }
-        print(ANSI.dim("narrow the query or use the full slug"))
+        screen.print(ANSI.dim("narrow the query or use the full slug"))
       }
     } catch {
       spinner.stop()
-      print(ANSI.red("model search failed: \(error)"))
+      screen.print(ANSI.red("model search failed: \(error)"))
     }
   }
 
@@ -423,13 +462,14 @@ struct Interactive: AsyncParsableCommand {
     tools: [any AgentTool],
     permissions: any PermissionDelegate,
     sessionStore: SessionStore,
-    fallbacks: [String])
+    fallbacks: [String],
+    screen: Screen)
     async -> Session?
   {
     do {
       let others = try sessionStore.list().filter { $0.id != currentId }
       guard !others.isEmpty else {
-        print(ANSI.dim("no other sessions to resume — /save names this one for later"))
+        screen.print(ANSI.dim("no other sessions to resume — /save names this one for later"))
         return nil
       }
       let meta = try Resume.resolve(query, in: others)
@@ -442,15 +482,15 @@ struct Interactive: AsyncParsableCommand {
         sessionStore: sessionStore,
         configuration: Session.Configuration(model: loaded.model, fallbackModels: fallbacks))
       let label = loaded.meta.name ?? String(loaded.meta.id.prefix(8))
-      print(ANSI.dim(
+      screen.print(ANSI.dim(
         "↩ resumed \(label) · \(loaded.messages.count) messages · "
           + "\(Renderer.usd(loaded.costUSD)) · model \(loaded.model)"))
       return session
     } catch let error as ValidationError {
-      print(ANSI.dim(error.message))
+      screen.print(ANSI.dim(error.message))
       return nil
     } catch {
-      print(ANSI.red("resume failed: \(error)"))
+      screen.print(ANSI.red("resume failed: \(error)"))
       return nil
     }
   }

@@ -12,6 +12,12 @@ final class LineReader {
   /// line; the reader redraws the prompt underneath it.
   var onCtrlO: (() -> Void)?
 
+  /// When set (and active), editing state is drawn in the screen's pinned bottom box
+  /// instead of inline, and notices go through the screen so the box stays below them.
+  var screen: Screen?
+
+  private var usesScreen: Bool { screen?.isActive == true }
+
   private let historyURL: URL?
   private var history: [String] = []
   private let isTTY = isatty(0) != 0
@@ -62,6 +68,10 @@ final class LineReader {
     var interruptArmed = false
 
     func redraw() {
+      if usesScreen, let screen {
+        screen.setInput(prompt: prompt, buffer: String(buffer), cursor: cursor)
+        return
+      }
       var out = "\r\u{1B}[K" + prompt + String(buffer)
       let tail = buffer.count - cursor
       if tail > 0 {
@@ -70,27 +80,43 @@ final class LineReader {
       write(out)
     }
 
-    write(prompt + String(buffer))
+    func endInput() {
+      if usesScreen, let screen {
+        screen.setInput(prompt: prompt, buffer: "", cursor: 0)
+      } else {
+        write("\n")
+      }
+    }
+
+    if usesScreen {
+      redraw()
+    } else {
+      write(prompt + String(buffer))
+    }
 
     while true {
       guard let byte = readByte() else {
-        write("\n")
+        endInput()
         return buffer.isEmpty ? nil : String(buffer)
       }
 
       switch byte {
       case 0x0A, 0x0D: // enter
-        write("\n")
+        endInput()
         return String(buffer)
 
       case 0x03: // Ctrl-C
         if buffer.isEmpty {
           if interruptArmed {
-            write("\n")
+            endInput()
             return nil
           }
           interruptArmed = true
-          write("\r\u{1B}[K" + ANSI.dim("(^C again to exit)") + "\n" + prompt)
+          if usesScreen, let screen {
+            screen.print(ANSI.dim("(^C again to exit)"))
+          } else {
+            write("\r\u{1B}[K" + ANSI.dim("(^C again to exit)") + "\n" + prompt)
+          }
         } else {
           buffer.removeAll()
           cursor = 0
@@ -100,7 +126,7 @@ final class LineReader {
 
       case 0x04: // Ctrl-D
         if buffer.isEmpty {
-          write("\n")
+          endInput()
           return nil
         }
 

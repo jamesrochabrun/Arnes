@@ -9,6 +9,10 @@ final class Spinner: @unchecked Sendable {
   private var task: Task<Void, Never>?
   private var active = false
 
+  /// When set (pinned-bar sessions), frames go to the bar's status line instead of
+  /// being drawn inline; `stop()` sends nil to clear it.
+  var sink: (@Sendable (String?) -> Void)?
+
   func start(_ label: String) {
     guard ANSI.isTTY else { return }
     lock.lock()
@@ -34,7 +38,11 @@ final class Spinner: @unchecked Sendable {
     active = false
     task?.cancel()
     task = nil
-    write("\r\u{1B}[K")
+    if let sink {
+      sink(nil)
+    } else {
+      write("\r\u{1B}[K")
+    }
   }
 
   private func draw(label: String, frame: Int, startedAt: Date) {
@@ -44,7 +52,11 @@ final class Spinner: @unchecked Sendable {
     let elapsed = Int(Date().timeIntervalSince(startedAt))
     let suffix = elapsed >= 2 ? " \(elapsed)s" : ""
     let glyph = Self.frames[frame % Self.frames.count]
-    write("\r\u{1B}[K\u{1B}[2m\(glyph) \(label)\(suffix)\u{1B}[0m")
+    if let sink {
+      sink("\u{1B}[2m\(glyph) \(label)\(suffix)\u{1B}[0m")
+    } else {
+      write("\r\u{1B}[K\u{1B}[2m\(glyph) \(label)\(suffix)\u{1B}[0m")
+    }
   }
 
   private func write(_ text: String) {
