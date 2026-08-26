@@ -138,6 +138,7 @@ struct Interactive: AsyncParsableCommand {
     // Inactive when either fd is piped, leaving output identical to plain printing.
     let screen = Screen()
     screen.measureOrigin()
+    screen.startAtTop()
     if screen.isActive {
       spinner.sink = { screen.setStatus($0) }
     }

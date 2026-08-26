@@ -84,6 +84,23 @@ final class Screen: @unchecked Sendable {
     transcriptRow = row
   }
 
+  /// Starts the session on a fresh window: scrolls whatever the shell already printed
+  /// into native scrollback (one newline per occupied row — unlike `ESC[2J`, nothing
+  /// is destroyed) and homes the cursor, so the banner lands on the top row while the
+  /// input bar pins to the bottom. Call once at startup, right after `measureOrigin`
+  /// and before the first draw.
+  func startAtTop() {
+    guard isActive, !closed else { return }
+    lock.lock()
+    defer { lock.unlock() }
+    guard transcriptRow > 1 else { return }
+    let rows = Self.terminalRows
+    write("\u{1B}[\(rows);1H"
+      + String(repeating: "\n", count: transcriptRow - 1)
+      + "\u{1B}[H")
+    transcriptRow = 1
+  }
+
   // MARK: Transcript
 
   /// Commits full lines above the bar (splits on newlines; "" prints a blank line).
