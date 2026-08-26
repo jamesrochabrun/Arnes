@@ -61,7 +61,10 @@ final class StreamingMarkdownTests: XCTestCase {
 
   func testSwiftFenceIsHighlighted() {
     let out = render(["```swift\nlet x = \"hi\"\n```\n"])
+    #if !os(Linux)
+    // Highlighting is macOS-only: Splash's grammar init crashes corelibs-foundation.
     XCTAssertTrue(out.contains("\u{1B}[35mlet\u{1B}[0m"), "keywords should be colored")
+    #endif
     XCTAssertTrue(out.contains("╭─ swift"))
   }
 
