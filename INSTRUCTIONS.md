@@ -89,6 +89,17 @@ contract agents rely on. Users symlink it to `~/.claude/skills/arnes` for global
 - Adding a dialect path: implement it behind `Dialect` inside `Session`, keep `send`/`Agent.run`
   signatures stable, and record the dialect actually used in the `RunRecord`.
 
+## Releasing
+
+Bump `arnesVersion` in `Sources/arnes/ArnesCommand.swift`, commit, tag `v<version>`, push the
+tag. The release workflow refuses tags that don't match `arnesVersion`, builds linux
+x64/arm64 (static stdlib) + a universal macOS binary split into per-arch slices, attaches
+everything to a GitHub release, then publishes to npm: four platform packages
+(`arnes-{darwin,linux}-{arm64,x64}`, binary only, `os`/`cpu`-gated) plus the `arnes`
+launcher (`npm/arnes/`, a Node shim over `optionalDependencies` — no postinstall scripts, so
+Bun installs work). `scripts/npm-release.sh` generates the publishable dirs; auth is the
+`NPM_TOKEN` secret, or npm trusted publishing once configured per package.
+
 ## Status
 
 - [x] v0.1 skeleton — chat-dialect loop, 3 tools, packs, records, `--verify`, scoreboard
@@ -139,4 +150,7 @@ contract agents rely on. Users symlink it to `~/.claude/skills/arnes` for global
       (permission-gated) unless the server annotates `readOnlyHint`; `arnes mcp` lists
       servers + tools, `--no-mcp` on `interactive`/`do` skips connecting; panels stay
       MCP-free (candidates would share server side effects)
+- [x] Distribution — tag-driven releases: GitHub release binaries (macOS arm64/x64,
+      Linux x64/arm64) + npm publish, so `bun add -g arnes` / `npm i -g arnes` / `bunx arnes`
+      install a prebuilt binary (see "Releasing")
 - [ ] Scoreboard-driven routing defaults; gated pack proposals

@@ -11,11 +11,22 @@ architecture; [INSTRUCTIONS.md](INSTRUCTIONS.md) if you're contributing.
 
 ## Install
 
+Prebuilt binaries (macOS arm64/x64, Linux x64/arm64) ship on npm — any JS package
+manager works:
+
+```bash
+bun add -g arnes                # or: npm install -g arnes
+bunx arnes                      # or zero-install one-off runs
+export OPENROUTER_API_KEY=sk-or-...
+arnes --help
+```
+
+Binaries are also attached to each [GitHub release](https://github.com/jamesrochabrun/Arnes/releases).
+Or build from source:
+
 ```bash
 git clone https://github.com/jamesrochabrun/Arnes && cd Arnes
 ./scripts/install.sh            # builds release + installs to /opt/homebrew/bin (pass a dir to override)
-export OPENROUTER_API_KEY=sk-or-...
-arnes --help
 ```
 
 (The script removes the old binary and ad-hoc re-signs the new one — overwriting a signed
