@@ -7,6 +7,7 @@ enum SlashCommand {
   case verify(model: String?)
   case compact(model: String?)
   case save(name: String?)
+  case resume(query: String?)
   case clear
   case status
   case help
@@ -29,6 +30,7 @@ enum SlashCommand {
     case "verify": return .verify(model: argument)
     case "compact": return .compact(model: argument)
     case "save": return .save(name: argument)
+    case "resume": return .resume(query: argument)
     case "clear": return .clear
     case "status": return .status
     case "help": return .help
@@ -42,10 +44,12 @@ enum SlashCommand {
     /cost            running session cost
     /verify [model]  verify the last turn with a second model (default: openrouter/auto)
     /compact [model] summarize older turns to free context (also automatic at ~80% full)
-    /save [name]     name this session for later --resume
+    /save [name]     name this session for later /resume
+    /resume [id|name] switch to another saved session (most recent other one when omitted)
     /clear           clear the conversation history
     /status          session id, model, messages, cost
     /help            this help
     /exit            leave (also Ctrl-D, or Ctrl-C twice on an empty line)
+    ctrl+o           toggle concise/verbose tool output (works mid-turn too)
     """
 }

@@ -13,9 +13,13 @@ import Glibc
 struct TerminalPermissions: PermissionDelegate {
   /// Stopped before prompting so an animating wait line can't clobber the question.
   let spinner: Spinner?
+  /// While a turn streams, the key watcher owns stdin — the y/n/a keypress must
+  /// come through it, or two blocking readers would steal each other's bytes.
+  let keys: KeyWatcher?
 
-  init(spinner: Spinner? = nil) {
+  init(spinner: Spinner? = nil, keys: KeyWatcher? = nil) {
     self.spinner = spinner
+    self.keys = keys
   }
 
   func decide(toolName: String, summary: String, argumentsJSON: String) async -> PermissionDecision {
@@ -23,7 +27,12 @@ struct TerminalPermissions: PermissionDelegate {
     print("\n" + ANSI.yellow("⚠ \(summary)"))
     print("  allow? [y]es · [n]o · [a]lways this session: ", terminator: "")
     fflush(stdout)
-    let answer = Self.readKey()
+    let answer: String?
+    if let keys, keys.isActive {
+      answer = await keys.readKey()
+    } else {
+      answer = Self.readKey()
+    }
     print(answer ?? "")
     switch answer?.lowercased() {
     case "y":
@@ -109,16 +118,17 @@ struct Interactive: AsyncParsableCommand {
     let service = try makeService()
     let sessionStore = SessionStore()
     let spinner = Spinner()
+    let keys = KeyWatcher()
     let permissions: any PermissionDelegate = safe
       ? DenyMutationsPermissions()
-      : TerminalPermissions(spinner: spinner)
+      : TerminalPermissions(spinner: spinner, keys: keys)
     let fallbacks = fallback.split(separator: ",").map(String.init)
     let requested = try loadSessionIfRequested(store: sessionStore)
     let mcp = await MCPSetup.connect(enabled: !noMcp, spinner: spinner, quiet: true)
     let tools = Session.defaultTools + mcp.tools
     let mcpServers = Set(mcp.tools.compactMap { ($0 as? MCPTool)?.server }).count
 
-    let session: Session
+    var session: Session
     if let loaded = requested {
       session = Session(
         resuming: loaded,
@@ -162,20 +172,67 @@ struct Interactive: AsyncParsableCommand {
       historyURL: URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".arnes/history"))
     let renderer = Renderer()
 
+    // Ctrl-O toggles concise/verbose tool output — mid-turn via the key watcher,
+    // at the prompt via the line reader.
+    let toggleVerbosity: @Sendable () -> Void = {
+      spinner.stop()
+      let on = renderer.toggleVerbose()
+      print("\r\u{1B}[K" + ANSI.dim(on
+        ? "◐ verbose tool output — ctrl+o to condense"
+        : "◑ concise tool output — ctrl+o for full arguments"))
+    }
+    keys.onCtrlO = toggleVerbosity
+    keys.onInterrupt = { interrupts.interrupt() }
+    reader.onCtrlO = toggleVerbosity
+
+    // Typing during a turn queues input: completed lines (Enter pressed) run as the
+    // next messages in order, an unfinished fragment pre-fills the next prompt.
+    var queued: [String] = []
+    var prefill = ""
+    func absorbTypeahead() {
+      let typed = prefill + keys.drainTypeahead()
+      prefill = ""
+      guard !typed.isEmpty else { return }
+      var lines = typed.components(separatedBy: "\n")
+      prefill = lines.removeLast()
+      queued.append(contentsOf: lines
+        .map { $0.trimmingCharacters(in: .whitespaces) }
+        .filter { !$0.isEmpty })
+    }
+
     if let prompt {
       print("› \(prompt)")
-      await runTurn(prompt, session: session, renderer: renderer, interrupts: interrupts, spinner: spinner)
+      await runTurn(prompt, session: session, renderer: renderer, interrupts: interrupts, spinner: spinner, keys: keys)
+      absorbTypeahead()
     }
 
     while true {
-      guard let line = reader.readLine(prompt: "› ") else { break }
-      let text = line.trimmingCharacters(in: .whitespaces)
+      let text: String
+      if !queued.isEmpty {
+        text = queued.removeFirst()
+        print("› \(text)") // echo what was typed blind during the turn
+      } else {
+        guard let line = reader.readLine(prompt: "› ", initial: prefill) else { break }
+        prefill = ""
+        text = line.trimmingCharacters(in: .whitespaces)
+      }
       if text.isEmpty { continue }
       if let command = SlashCommand.parse(text) {
+        // /resume swaps the live session, so it's handled here where `session` is ours.
+        if case .resume(let query) = command {
+          if let switched = await resumeSession(
+            query, currentId: session.id, service: service, tools: tools,
+            permissions: permissions, sessionStore: sessionStore, fallbacks: fallbacks)
+          {
+            session = switched
+          }
+          continue
+        }
         if await handle(command, session: session, spinner: spinner) { break }
         continue
       }
-      await runTurn(text, session: session, renderer: renderer, interrupts: interrupts, spinner: spinner)
+      await runTurn(text, session: session, renderer: renderer, interrupts: interrupts, spinner: spinner, keys: keys)
+      absorbTypeahead()
     }
     await mcp.provider.shutdown()
     print(ANSI.dim("session \(session.id.prefix(8))… · total \(Renderer.usd(await session.costUSD))"))
@@ -188,10 +245,13 @@ struct Interactive: AsyncParsableCommand {
     session: Session,
     renderer: Renderer,
     interrupts: InterruptController,
-    spinner: Spinner)
+    spinner: Spinner,
+    keys: KeyWatcher)
     async
   {
     renderer.beginTurn()
+    keys.start()
+    defer { keys.stop() }
     let task = Task {
       spinner.start("waiting for model")
       do {
@@ -284,6 +344,9 @@ struct Interactive: AsyncParsableCommand {
         print(ANSI.red("save failed: \(error)"))
       }
 
+    case .resume:
+      break // handled in the REPL loop, which owns the session binding
+
     case .clear:
       await session.clearHistory()
       print(ANSI.dim("history cleared"))
@@ -345,6 +408,50 @@ struct Interactive: AsyncParsableCommand {
     } catch {
       spinner.stop()
       print(ANSI.red("model search failed: \(error)"))
+    }
+  }
+
+  /// `/resume [id|name]`: loads another saved session and returns it to swap into the
+  /// REPL; prints why and returns nil when nothing (unambiguous) matches. Resolution
+  /// mirrors `arnes resume`: exact id, unique id prefix, or saved name — most recent
+  /// *other* session when the query is omitted (the current one is always excluded;
+  /// it's already live and continuously persisted).
+  private func resumeSession(
+    _ query: String?,
+    currentId: String,
+    service: OpenRouterService,
+    tools: [any AgentTool],
+    permissions: any PermissionDelegate,
+    sessionStore: SessionStore,
+    fallbacks: [String])
+    async -> Session?
+  {
+    do {
+      let others = try sessionStore.list().filter { $0.id != currentId }
+      guard !others.isEmpty else {
+        print(ANSI.dim("no other sessions to resume — /save names this one for later"))
+        return nil
+      }
+      let meta = try Resume.resolve(query, in: others)
+      let loaded = try sessionStore.load(id: meta.id)
+      let session = Session(
+        resuming: loaded,
+        service: service,
+        tools: tools,
+        permissions: permissions,
+        sessionStore: sessionStore,
+        configuration: Session.Configuration(model: loaded.model, fallbackModels: fallbacks))
+      let label = loaded.meta.name ?? String(loaded.meta.id.prefix(8))
+      print(ANSI.dim(
+        "↩ resumed \(label) · \(loaded.messages.count) messages · "
+          + "\(Renderer.usd(loaded.costUSD)) · model \(loaded.model)"))
+      return session
+    } catch let error as ValidationError {
+      print(ANSI.dim(error.message))
+      return nil
+    } catch {
+      print(ANSI.red("resume failed: \(error)"))
+      return nil
     }
   }
 
