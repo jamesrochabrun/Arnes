@@ -5,10 +5,11 @@ import Foundation
 // MARK: - MCPSetup
 
 /// Shared CLI-side MCP bootstrap: loads `~/.arnes/mcp.json`, connects the servers, and
-/// prints one status line per server. Callers own the returned provider and must
-/// `shutdown()` it so the server processes die with the CLI.
+/// prints one status line per server (`quiet` skips the ok lines for callers that
+/// summarize servers themselves; warnings always print). Callers own the returned
+/// provider and must `shutdown()` it so the server processes die with the CLI.
 enum MCPSetup {
-  static func connect(enabled: Bool, spinner: Spinner? = nil) async -> (provider: MCPToolProvider, tools: [any AgentTool]) {
+  static func connect(enabled: Bool, spinner: Spinner? = nil, quiet: Bool = false) async -> (provider: MCPToolProvider, tools: [any AgentTool]) {
     let provider = MCPToolProvider()
     guard enabled else { return (provider, []) }
     let config: MCPConfig
@@ -27,7 +28,7 @@ enum MCPSetup {
     for status in statuses {
       if let error = status.error {
         print(ANSI.yellow("⚠ mcp \(status.server): \(error)"))
-      } else {
+      } else if !quiet {
         print(ANSI.dim("mcp \(status.server) · \(status.toolCount) tools"))
       }
     }
