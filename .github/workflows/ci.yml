@@ -22,6 +22,18 @@ jobs:
         run: swift test
 
   # The release pipeline ships this exact artifact — build it on every push so a
+  # broken universal build surfaces here, not at tag time. Mirrors the release
+  # job's Xcode selection (the image default's SwiftPM breaks on newer manifests).
+  macos-universal:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+      - name: Select latest Xcode
+        run: sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)/Contents/Developer" && swift --version
+      - name: Universal release build
+        run: swift build -c release --arch arm64 --arch x86_64
+
+  # The release pipeline ships this exact artifact — build it on every push so a
   # broken static build surfaces here, not at tag time.
   linux-static:
     runs-on: ubuntu-latest
