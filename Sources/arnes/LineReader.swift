@@ -4,7 +4,8 @@ import Glibc
 #endif
 
 /// Minimal raw-mode line editor: arrow-key history, left/right cursor movement,
-/// backspace, Ctrl-C (clear line; twice on empty = exit), Ctrl-D on empty = exit.
+/// backspace, Esc clears the line, Ctrl-C (clear line; twice on empty = exit),
+/// Ctrl-D on empty = exit.
 /// Falls back to `Swift.readLine()` when stdin isn't a TTY so piped input works.
 /// Zero dependencies on purpose.
 final class LineReader {
@@ -164,19 +165,34 @@ final class LineReader {
         cursor = buffer.count
         redraw()
 
-      case 0x1B: // escape sequence
-        guard readByte() == UInt8(ascii: "[") else { continue }
-        // Full CSI parse: parameter bytes until the final byte (0x40–0x7E), so
-        // multi-byte sequences (delete, cursor-position reports) never leak into
-        // the buffer as text.
+      case 0x1B: // bare Esc or an escape sequence
+        // A sequence's remaining bytes arrive in the same burst; a lone Esc press is
+        // followed by silence. Blocking here would swallow the *next* keystroke.
+        guard byteAvailable(withinMs: 25) else {
+          buffer.removeAll() // bare Esc — clear the line
+          cursor = 0
+          redraw()
+          continue
+        }
+        guard let opener = readByte() else { continue }
+        // "[" opens a CSI sequence, "O" an SS3 one (application-mode arrows);
+        // anything else was an Alt+key pair, dropped. Parse until the final byte
+        // (0x40–0x7E) so multi-byte sequences (delete, cursor-position reports)
+        // never leak into the buffer as text.
         var params: [UInt8] = []
         var final: UInt8?
-        while let next = readByte() {
-          if (0x40...0x7E).contains(next) {
-            final = next
-            break
+        if opener == UInt8(ascii: "O") {
+          final = readByte()
+        } else if opener == UInt8(ascii: "[") {
+          while let next = readByte() {
+            if (0x40...0x7E).contains(next) {
+              final = next
+              break
+            }
+            params.append(next)
           }
-          params.append(next)
+        } else {
+          continue
         }
         switch final {
         case UInt8(ascii: "A"): // up — history back
@@ -250,6 +266,13 @@ final class LineReader {
     var byte: UInt8 = 0
     let count = read(STDIN_FILENO, &byte, 1)
     return count == 1 ? byte : nil
+  }
+
+  /// Whether another byte is already behind the one just read — distinguishes an
+  /// escape sequence's ESC (followed immediately by "[" etc.) from a lone Esc press.
+  private func byteAvailable(withinMs timeout: Int32) -> Bool {
+    var fds = pollfd(fd: STDIN_FILENO, events: Int16(POLLIN), revents: 0)
+    return poll(&fds, 1, timeout) > 0 && fds.revents & Int16(POLLIN) != 0
   }
 
   private func write(_ text: String) {
