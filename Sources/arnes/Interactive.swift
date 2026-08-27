@@ -141,6 +141,9 @@ struct Interactive: AsyncParsableCommand {
   @Flag(help: "Skip connecting MCP servers from ~/.arnes/mcp.json.")
   var noMcp = false
 
+  @Flag(help: "Skip loading skills from .arnes/skills, .claude/skills, and ~/.arnes/skills.")
+  var noSkills = false
+
   func run() async throws {
     let service = try makeService()
     let sessionStore = SessionStore()
@@ -161,7 +164,9 @@ struct Interactive: AsyncParsableCommand {
     let fallbacks = fallback.split(separator: ",").map(String.init)
     let requested = try loadSessionIfRequested(store: sessionStore)
     let mcp = await MCPSetup.connect(enabled: !noMcp, spinner: spinner, quiet: true)
-    let tools = Session.defaultTools + mcp.tools
+    let skills = noSkills ? [] : SkillLibrary.discover()
+    let skillTools: [any AgentTool] = skills.isEmpty ? [] : [SkillTool(skills: skills)]
+    let tools = Session.defaultTools + skillTools + mcp.tools
     let mcpServers = Set(mcp.tools.compactMap { ($0 as? MCPTool)?.server }).count
 
     var session: Session
@@ -180,6 +185,7 @@ struct Interactive: AsyncParsableCommand {
         dialect: "auto",
         mcpServers: mcpServers,
         mcpTools: mcp.tools.count,
+        skills: skills.count,
         resumeLine: "resumed \(label) · \(loaded.messages.count) messages · \(Renderer.usd(loaded.costUSD))"))
     } else {
       session = Session(
@@ -193,7 +199,8 @@ struct Interactive: AsyncParsableCommand {
         model: model,
         dialect: "auto",
         mcpServers: mcpServers,
-        mcpTools: mcp.tools.count))
+        mcpTools: mcp.tools.count,
+        skills: skills.count))
     }
 
     // At the prompt, raw mode owns Ctrl-C as a byte; during a turn, this source
@@ -292,7 +299,18 @@ struct Interactive: AsyncParsableCommand {
           }
           continue
         }
-        if await handle(command, session: session, spinner: spinner, screen: screen) { break }
+        // /name [args] runs a skill of that name as a turn (built-ins take precedence).
+        if case .unknown(let name, let argument) = command,
+           let skill = skills.first(where: { $0.name == name })
+        {
+          await runTurn(
+            skill.invocationPrompt(arguments: argument),
+            session: session, renderer: renderer, interrupts: interrupts,
+            spinner: spinner, keys: keys, screen: screen)
+          absorbTypeahead()
+          continue
+        }
+        if await handle(command, session: session, spinner: spinner, screen: screen, skills: skills) { break }
         continue
       }
       await runTurn(text, session: session, renderer: renderer, interrupts: interrupts, spinner: spinner, keys: keys, screen: screen)
@@ -362,7 +380,7 @@ struct Interactive: AsyncParsableCommand {
   // MARK: Slash commands
 
   /// Returns true when the REPL should exit.
-  private func handle(_ command: SlashCommand, session: Session, spinner: Spinner, screen: Screen) async -> Bool {
+  private func handle(_ command: SlashCommand, session: Session, spinner: Spinner, screen: Screen, skills: [Skill]) async -> Bool {
     switch command {
     case .model(let query):
       await handleModel(query, session: session, spinner: spinner, screen: screen)
@@ -428,10 +446,21 @@ struct Interactive: AsyncParsableCommand {
       let cost = await session.costUSD
       screen.print("session \(id)\nmodel   \(model)\nmessages \(messages)\ncost    \(Renderer.usd(cost))")
 
+    case .skills:
+      if skills.isEmpty {
+        screen.print(ANSI.dim(
+          "no skills loaded — add <name>/SKILL.md under .arnes/skills, .claude/skills, or ~/.arnes/skills"))
+      } else {
+        let rows = skills.map { skill in
+          "\(ANSI.bold(skill.name))  \(ANSI.dim(skill.description.isEmpty ? skill.directory.path : skill.description))"
+        }
+        screen.print(rows.joined(separator: "\n"))
+      }
+
     case .help:
       screen.print(SlashCommand.helpText)
 
-    case .unknown(let name):
+    case .unknown(let name, _):
       screen.print(ANSI.dim("unknown command /\(name)\n") + SlashCommand.helpText)
 
     case .exit:

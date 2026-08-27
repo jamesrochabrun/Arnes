@@ -57,7 +57,7 @@ struct Arnes: AsyncParsableCommand {
     commandName: "arnes",
     abstract: "Arnes — a model-adaptive agent harness for OpenRouter.",
     version: arnesVersion,
-    subcommands: [Interactive.self, Chat.self, Do.self, Resume.self, Models.self, Status.self, Runs.self, Sessions.self, Eval.self, Evals.self, Probe.self, Mcp.self],
+    subcommands: [Interactive.self, Chat.self, Do.self, Resume.self, Models.self, Status.self, Runs.self, Sessions.self, Eval.self, Evals.self, Probe.self, Mcp.self, Skills.self],
     defaultSubcommand: Interactive.self)
 }
 
@@ -136,6 +136,9 @@ struct Do: AsyncParsableCommand {
   @Flag(help: "Skip connecting MCP servers from ~/.arnes/mcp.json.")
   var noMcp = false
 
+  @Flag(help: "Skip loading skills from .arnes/skills, .claude/skills, and ~/.arnes/skills.")
+  var noSkills = false
+
   func run() async throws {
     let service = try makeService()
     if panel != nil {
@@ -145,9 +148,11 @@ struct Do: AsyncParsableCommand {
     // Panels stay MCP-free: candidates run in isolated snapshots, and shared server
     // processes would let them trample each other through side effects.
     let mcp = await MCPSetup.connect(enabled: !noMcp)
+    let skills = noSkills ? [] : SkillLibrary.discover()
+    let skillTools: [any AgentTool] = skills.isEmpty ? [] : [SkillTool(skills: skills)]
     let agent = Agent(
       service: service,
-      tools: Session.defaultTools + mcp.tools,
+      tools: Session.defaultTools + skillTools + mcp.tools,
       permissions: safe ? DenyMutationsPermissions() : AutoApprovePermissions())
     let result = try await agent.run(
       task: task,

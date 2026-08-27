@@ -782,12 +782,20 @@ public actor Session {
     }
   }
 
-  /// The prompt pack for the current model, plus the compaction summary when one exists.
+  /// The prompt pack for the current model, plus the skill listing when a `SkillTool`
+  /// is in the toolset, plus the compaction summary when one exists.
   private func systemText(pack: PromptPack) -> String {
-    guard let compactionSummary else { return pack.text }
-    return pack.text
-      + "\n\n# Conversation summary\nEarlier context was compacted. Rely on these notes:\n"
-      + compactionSummary
+    var text = pack.text
+    if let section = tools.lazy.compactMap({ $0 as? SkillTool }).first?.promptSection,
+       !section.isEmpty
+    {
+      text += "\n\n" + section
+    }
+    if let compactionSummary {
+      text += "\n\n# Conversation summary\nEarlier context was compacted. Rely on these notes:\n"
+        + compactionSummary
+    }
+    return text
   }
 
   // MARK: Helpers

@@ -80,6 +80,23 @@ ARNES_MCP_CONFIG=./mcp.json arnes do "..."   # per-project config override
   prompts. Panels never load MCP tools (parallel candidates would share server side
   effects). `arnes mcp` needs no API key — use it to debug a server config.
 
+## Skills — "give the agent a skill"
+
+```bash
+arnes skills                   # list discovered skills (name, description, source dir)
+arnes do "..." --no-skills     # run without skills
+```
+
+- A skill is `<name>/SKILL.md` (YAML frontmatter `name`/`description` + markdown body —
+  the standard agent-skills format, so existing Claude skills work unchanged). Discovery
+  order, first name wins: `./.arnes/skills/`, `./.claude/skills/`, `~/.arnes/skills/`.
+- The loop only puts names + descriptions in the system prompt; the model pulls a body in
+  with the read-only `skill` tool (ungated), and reads supporting files from the skill's
+  directory as needed. `/skills` lists them in the REPL. `arnes skills` needs no API key.
+- REPL user invocation: `/name args` runs the skill as a turn — `$ARGUMENTS` gets the whole
+  arg string, `$1`–`$9` the whitespace-split positionals, and a body with no placeholders
+  gets the args appended. Built-in slash commands win over a skill of the same name.
+
 ## Conformance probe — "probe a model"
 
 ```bash

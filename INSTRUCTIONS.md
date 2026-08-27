@@ -56,9 +56,11 @@ Sources/ArnesKit/
   ResponsesDialect.swift   # /responses native path: chat history → OpenAI shapes + stream accumulator
   DialectVerdict.swift     # conformance verdicts → ~/.arnes/dialects.jsonl; auto pins broken natives to chat
   MCP.swift                # MCP tool provider: ~/.arnes/mcp.json → stdio JSON-RPC clients → [any AgentTool]
+  Skills.swift             # SKILL.md discovery (.arnes/.claude project dirs + ~/.arnes/skills) + the `skill` tool
 Sources/arnes/             # the CLI
   ArnesCommand.swift       # root: interactive (default) · chat · do · resume · models · status · runs · sessions
   McpCommand.swift         # `arnes mcp` (list servers + tools) + shared CLI MCP bootstrap
+  SkillsCommand.swift      # `arnes skills` — list discovered skills (name, description, source dir)
   Interactive.swift        # REPL: turns, slash commands, SIGINT→cancel, TerminalPermissions
   Header.swift             # session-start banner box (model, dialect, cwd, MCP; plain line when piped)
   Screen.swift             # pinned bottom input box + status line; transcript commits above (redraw-below, scrollback intact; passthrough when piped)
@@ -66,7 +68,7 @@ Sources/arnes/             # the CLI
   KeyWatcher.swift         # mid-turn stdin: Ctrl-O verbosity toggle, Ctrl-C cancel, live type-ahead queue; feeds permission prompts
   Renderer.swift           # AgentEvent → terminal via Screen; concise tool lines (Ctrl-O for verbose); cost/route status line per turn
   Markdown.swift           # StreamingMarkdown: delta stream → styled prose/headings/bullets + fenced code with Splash highlighting
-  SlashCommand.swift       # /model /cost /verify /compact /save /resume /clear /status /help /exit
+  SlashCommand.swift       # /model /cost /verify /compact /save /resume /clear /status /skills /help /exit
   ANSI.swift               # styling, TTY-gated
 ```
 
@@ -156,6 +158,16 @@ Bun installs work). `scripts/npm-release.sh` generates the publishable dirs; aut
       (permission-gated) unless the server annotates `readOnlyHint`; `arnes mcp` lists
       servers + tools, `--no-mcp` on `interactive`/`do` skips connecting; panels stay
       MCP-free (candidates would share server side effects)
+- [x] Skills — standard `SKILL.md` folders (frontmatter name/description + markdown body,
+      drop-in compatible with the agent-skills ecosystem) discovered from `.arnes/skills/`,
+      `.claude/skills/`, then `~/.arnes/skills/` (first name wins, so projects shadow
+      globals). Progressive disclosure keeps small models honest: only name + description
+      ride the system prompt; one dumb `skill(name)` tool (read-only, ungated) returns the
+      body, and supporting files are read on demand from the skill's directory. User
+      invocation follows the Claude Code/Codex convention: `/name args` in the REPL runs
+      the skill as a turn, with `$ARGUMENTS`/`$1`–`$9` substitution (args appended when the
+      body has no placeholders); built-in slash commands take precedence over skill names.
+      `arnes skills` lists them, `/skills` in the REPL, `--no-skills` on `interactive`/`do`
 - [x] Distribution — tag-driven releases: GitHub release binaries (macOS arm64/x64,
       Linux x64/arm64) + npm publish, so `bun add -g arnes` / `npm i -g arnes` / `bunx arnes`
       install a prebuilt binary (see "Releasing")
