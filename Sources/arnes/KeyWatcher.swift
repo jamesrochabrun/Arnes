@@ -4,8 +4,10 @@ import Glibc
 #endif
 
 /// Listens for control keys on the TTY while a turn is streaming: Ctrl-O toggles
-/// verbose tool output, Ctrl-C cancels the turn (raw mode disables ISIG, so the
-/// byte arrives here instead of as SIGINT).
+/// verbose tool output, Esc or Ctrl-C cancels the turn (raw mode disables ISIG, so
+/// the byte arrives here instead of as SIGINT). A bare Esc is told apart from the
+/// ESC that opens an arrow-key sequence by a short poll — sequences arrive as one
+/// burst, a lone press is followed by silence.
 ///
 /// Runs on a background thread with a polling read so `stop()` can wait for it to
 /// let go of stdin before the prompt's `LineReader` takes over. While the watcher
@@ -117,6 +119,8 @@ final class KeyWatcher: @unchecked Sendable {
         onCtrlO?()
       case 0x03: // Ctrl-C
         onInterrupt?()
+      case 0x1B where !isMidEscape && !inputPending(withinMs: 25): // bare Esc
+        onInterrupt?()
       default:
         switch bufferTypeahead(byte) {
         case .changed(let fragment, let queued):
@@ -128,6 +132,17 @@ final class KeyWatcher: @unchecked Sendable {
         }
       }
     }
+  }
+
+  private var isMidEscape: Bool {
+    lock.withLock { escapeState != .none }
+  }
+
+  /// Whether another byte is already behind this one — distinguishes an escape
+  /// sequence's ESC (followed immediately by "[" etc.) from a lone Esc press.
+  private func inputPending(withinMs timeout: Int32) -> Bool {
+    var fds = pollfd(fd: STDIN_FILENO, events: Int16(POLLIN), revents: 0)
+    return poll(&fds, 1, timeout) > 0 && fds.revents & Int16(POLLIN) != 0
   }
 
   // MARK: Type-ahead

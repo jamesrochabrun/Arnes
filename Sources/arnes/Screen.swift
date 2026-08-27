@@ -46,7 +46,7 @@ final class Screen: @unchecked Sendable {
   private var transcriptRow = 0
 
   static let idlePlaceholder = "message · /help for commands"
-  static let busyPlaceholder = "type to queue · ctrl+c interrupts"
+  static let busyPlaceholder = "type to queue · esc interrupts"
 
   /// Asks the terminal where the cursor is (DSR `ESC[6n`) so the first bar draw can
   /// pad down to the window's bottom rows. Call once at startup, before any output

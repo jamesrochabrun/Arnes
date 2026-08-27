@@ -18,11 +18,14 @@ struct TerminalPermissions: PermissionDelegate {
   let keys: KeyWatcher?
   /// Routes the question above the pinned input box; nil prints inline (headless paths).
   let screen: Screen?
+  /// Esc at the prompt doesn't just deny the one tool — it cancels the whole turn.
+  let onEscape: (@Sendable () -> Void)?
 
-  init(spinner: Spinner? = nil, keys: KeyWatcher? = nil, screen: Screen? = nil) {
+  init(spinner: Spinner? = nil, keys: KeyWatcher? = nil, screen: Screen? = nil, onEscape: (@Sendable () -> Void)? = nil) {
     self.spinner = spinner
     self.keys = keys
     self.screen = screen
+    self.onEscape = onEscape
   }
 
   func decide(toolName: String, summary: String, argumentsJSON: String) async -> PermissionDecision {
@@ -43,11 +46,17 @@ struct TerminalPermissions: PermissionDelegate {
     } else {
       answer = Self.readKey()
     }
+    let shown: String
+    switch answer {
+    case "\u{1B}": shown = "esc"
+    case .some(let key): shown = key < " " ? "" : key // don't echo raw control bytes
+    case nil: shown = ""
+    }
     if pinned, let screen {
       screen.setStatus(nil)
-      screen.print(ANSI.dim("  \(question): ") + (answer ?? ""))
+      screen.print(ANSI.dim("  \(question): ") + shown)
     } else {
-      print(answer ?? "")
+      print(shown)
     }
     switch answer?.lowercased() {
     case "y":
@@ -56,6 +65,9 @@ struct TerminalPermissions: PermissionDelegate {
     case "a":
       spinner?.start("running \(toolName)")
       return .allowAlwaysThisSession
+    case "\u{1B}":
+      onEscape?()
+      return .deny(reason: "user interrupted")
     default:
       return .deny(reason: "user declined")
     }
@@ -142,9 +154,10 @@ struct Interactive: AsyncParsableCommand {
     if screen.isActive {
       spinner.sink = { screen.setStatus($0) }
     }
+    let interrupts = InterruptController()
     let permissions: any PermissionDelegate = safe
       ? DenyMutationsPermissions()
-      : TerminalPermissions(spinner: spinner, keys: keys, screen: screen)
+      : TerminalPermissions(spinner: spinner, keys: keys, screen: screen, onEscape: { interrupts.interrupt() })
     let fallbacks = fallback.split(separator: ",").map(String.init)
     let requested = try loadSessionIfRequested(store: sessionStore)
     let mcp = await MCPSetup.connect(enabled: !noMcp, spinner: spinner, quiet: true)
@@ -185,7 +198,6 @@ struct Interactive: AsyncParsableCommand {
 
     // At the prompt, raw mode owns Ctrl-C as a byte; during a turn, this source
     // turns SIGINT into cancellation of the in-flight task.
-    let interrupts = InterruptController()
     signal(SIGINT, SIG_IGN)
     let sigintSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .global())
     sigintSource.setEventHandler { interrupts.interrupt() }
@@ -240,6 +252,14 @@ struct Interactive: AsyncParsableCommand {
     }
 
     if let prompt {
+      // `arnes ghosty` when "ghosty" is a saved session is almost always a typo'd
+      // resume, not a one-word first message — send it anyway, but say so.
+      if requested == nil,
+         let match = (try? sessionStore.list())?.first(where: { $0.name?.lowercased() == prompt.lowercased() }),
+         let name = match.name
+      {
+        screen.print(ANSI.dim("hint: \"\(name)\" is a saved session — did you mean: arnes resume \(name)"))
+      }
       screen.print("› \(prompt)")
       await runTurn(prompt, session: session, renderer: renderer, interrupts: interrupts, spinner: spinner, keys: keys, screen: screen)
       absorbTypeahead()
