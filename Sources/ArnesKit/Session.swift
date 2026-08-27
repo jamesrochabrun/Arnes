@@ -36,17 +36,27 @@ public actor Session {
     /// Wire dialect selection; `.auto` follows the model's profile (native for
     /// Anthropic/OpenAI families, chat otherwise).
     public var dialect: DialectOverride
+    /// Appended to the system prompt after the pack — a subagent's role + body.
+    /// Harness plumbing, not prompt tuning: family behavior still lives in packs.
+    public var systemSuffix: String?
+    /// Subagent name recorded on this session's `RunRecord`s, so the scoreboard can
+    /// tell delegated runs apart. Nil for top-level sessions.
+    public var agent: String?
 
     public init(
       model: String = "openrouter/auto",
       fallbackModels: [String] = [],
       maxStepsPerTurn: Int = 30,
-      dialect: DialectOverride = .auto)
+      dialect: DialectOverride = .auto,
+      systemSuffix: String? = nil,
+      agent: String? = nil)
     {
       self.model = model
       self.fallbackModels = fallbackModels
       self.maxStepsPerTurn = maxStepsPerTurn
       self.dialect = dialect
+      self.systemSuffix = systemSuffix
+      self.agent = agent
     }
   }
 
@@ -90,6 +100,8 @@ public actor Session {
   private let fallbackModels: [String]
   private let maxStepsPerTurn: Int
   private let dialectOverride: DialectOverride
+  private let systemSuffix: String?
+  private let agentLabel: String?
   private var alwaysAllowedTools: Set<String> = []
   private var turnTask: Task<Void, Never>?
   private var turnIndex: Int
@@ -128,6 +140,8 @@ public actor Session {
     fallbackModels = configuration.fallbackModels
     maxStepsPerTurn = configuration.maxStepsPerTurn
     dialectOverride = configuration.dialect
+    systemSuffix = configuration.systemSuffix
+    agentLabel = configuration.agent
     turnIndex = 0
     metaWritten = false
   }
@@ -157,6 +171,8 @@ public actor Session {
     fallbackModels = configuration.fallbackModels
     maxStepsPerTurn = configuration.maxStepsPerTurn
     dialectOverride = configuration.dialect
+    systemSuffix = configuration.systemSuffix
+    agentLabel = configuration.agent
     turnIndex = loaded.turnCount
     metaWritten = true
     compactionSummary = loaded.compactionSummary
@@ -407,6 +423,7 @@ public actor Session {
       packFamily: profile.family.rawValue)
     record.sessionId = id
     record.turnIndex = turnIndex
+    record.agent = agentLabel
     turnIndex += 1
     lastUserText = text
 
@@ -539,6 +556,16 @@ public actor Session {
           continuation.yield(.toolDenied(name: name, reason: denial))
         } else {
           output = await execute(name: name, argumentsJSON: argumentsJSON)
+          // Subagent spend (task tool) belongs to this turn: drain it into the
+          // record so `/cost` and the scoreboard see the true total.
+          if let costly = tools.first(where: { $0.name == name }) as? CostReportingTool {
+            let accrued = costly.drainAccruedCost()
+            if accrued > 0 {
+              record.costUSD += accrued
+              turnCost += accrued
+              costUSD += accrued
+            }
+          }
           continuation.yield(.toolResult(name: name, preview: String(output.prefix(200))))
         }
         appendToHistory(.tool(output, toolCallId: callId))
@@ -782,14 +809,18 @@ public actor Session {
     }
   }
 
-  /// The prompt pack for the current model, plus the skill listing when a `SkillTool`
-  /// is in the toolset, plus the compaction summary when one exists.
+  /// The prompt pack for the current model, plus any tool-contributed sections (skill
+  /// and subagent listings), the subagent role suffix when this is a nested session,
+  /// plus the compaction summary when one exists.
   private func systemText(pack: PromptPack) -> String {
     var text = pack.text
-    if let section = tools.lazy.compactMap({ $0 as? SkillTool }).first?.promptSection,
-       !section.isEmpty
+    for section in tools.compactMap({ ($0 as? PromptContributing)?.promptSection })
+      where !section.isEmpty
     {
       text += "\n\n" + section
+    }
+    if let systemSuffix {
+      text += "\n\n" + systemSuffix
     }
     if let compactionSummary {
       text += "\n\n# Conversation summary\nEarlier context was compacted. Rely on these notes:\n"

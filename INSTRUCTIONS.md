@@ -57,10 +57,12 @@ Sources/ArnesKit/
   DialectVerdict.swift     # conformance verdicts → ~/.arnes/dialects.jsonl; auto pins broken natives to chat
   MCP.swift                # MCP tool provider: ~/.arnes/mcp.json → stdio JSON-RPC clients → [any AgentTool]
   Skills.swift             # SKILL.md discovery (.arnes/.claude project dirs + ~/.arnes/skills) + the `skill` tool
+  Subagents.swift          # agent .md discovery (.arnes/.claude agents dirs, Claude Code format) + the `task` tool (nested Session)
 Sources/arnes/             # the CLI
   ArnesCommand.swift       # root: interactive (default) · chat · do · resume · models · status · runs · sessions
   McpCommand.swift         # `arnes mcp` (list servers + tools) + shared CLI MCP bootstrap
   SkillsCommand.swift      # `arnes skills` — list discovered skills (name, description, source dir)
+  AgentsCommand.swift      # `arnes agents` — list discovered subagents (name, model, tools, source)
   Interactive.swift        # REPL: turns, slash commands, SIGINT→cancel, TerminalPermissions
   Header.swift             # session-start banner box (model, dialect, cwd, MCP; plain line when piped)
   Screen.swift             # pinned bottom input box + status line; transcript commits above (redraw-below, scrollback intact; passthrough when piped)
@@ -68,7 +70,7 @@ Sources/arnes/             # the CLI
   KeyWatcher.swift         # mid-turn stdin: Ctrl-O verbosity toggle, Ctrl-C cancel, live type-ahead queue; feeds permission prompts
   Renderer.swift           # AgentEvent → terminal via Screen; concise tool lines (Ctrl-O for verbose); cost/route status line per turn
   Markdown.swift           # StreamingMarkdown: delta stream → styled prose/headings/bullets + fenced code with Splash highlighting
-  SlashCommand.swift       # /model /cost /verify /compact /save /resume /clear /status /skills /help /exit
+  SlashCommand.swift       # /model /cost /verify /compact /save /resume /clear /status /skills /agents /help /exit
   ANSI.swift               # styling, TTY-gated
 ```
 
@@ -151,7 +153,22 @@ Bun installs work). `scripts/npm-release.sh` generates the publishable dirs; aut
       type-ahead; permission prompts ask via the status line. TTY-only — piped sessions
       keep the plain line-by-line output
 - [ ] Cached model profiles (manifest still fetched per process)
-- [ ] Panel policy triggers (e.g. auto-panel after verifier rejections); `subtask` tool (nested Session)
+- [ ] Panel policy triggers (e.g. auto-panel after verifier rejections)
+- [x] Subagents — `.md` agent files (frontmatter name/description/model/tools + body as
+      system prompt, drop-in compatible with `.claude/agents`) discovered from
+      `.arnes/agents/`, `.claude/agents/`, `~/.arnes/agents/` (first name wins). Built-ins
+      `general` (full toolset) and read-only `explore` work with zero files, shadowable by
+      name. One dumb `task` tool (`agent` + `task` strings) spawns a
+      nested `Session`: fresh context, the agent's body as system suffix, tools capped to
+      its allowlist and never the task tool (one level of nesting), permission prompts
+      prefixed with the agent name. Only the final report returns to the lead; progress
+      streams as nested `.subagent` events (◇ start / indented tool lines / ◆ finish in
+      the REPL), spend drains into the parent turn via `CostReportingTool`, and the
+      nested run lands in runs.jsonl tagged `agent` (post-routing models included).
+      The user owns subagent models — `model:` frontmatter (slug, fuzzy query, `inherit`),
+      `--agent-model name=model` on `interactive`/`do`, `/agents <name> <model>` mid-session,
+      or named in the prompt (relayed via the task tool's optional `model` field; pins >
+      in-prompt request > frontmatter > inherit); `arnes agents` lists, `--no-agents` disables
 - [x] MCP tool provider — `~/.arnes/mcp.json` (Claude Desktop `mcpServers` shape, stdio
       transport, `ARNES_MCP_CONFIG` per-project override) bridges server tools into the
       loop as `mcp__<server>__<tool>`, schemas passed through untouched; `.mutating`

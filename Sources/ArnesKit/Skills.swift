@@ -131,7 +131,7 @@ public enum SkillLibrary {
 
 /// The one tool skills add to the loop. Schema stays dumb — a single `name` string — so
 /// non-frontier models survive it; everything task-specific lives in the skill text.
-public struct SkillTool: AgentTool {
+public struct SkillTool: AgentTool, PromptContributing {
   public let name = "skill"
   public let description =
     "Load a skill: expert instructions for a specific kind of task. "

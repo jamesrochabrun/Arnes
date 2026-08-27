@@ -144,6 +144,16 @@ struct Interactive: AsyncParsableCommand {
   @Flag(help: "Skip loading skills from .arnes/skills, .claude/skills, and ~/.arnes/skills.")
   var noSkills = false
 
+  @Flag(help: "Disable subagents (the task tool and .arnes/.claude agents).")
+  var noAgents = false
+
+  @Option(
+    name: .customLong("agent-model"),
+    help: ArgumentHelp(
+      "Pin a subagent to a model: <agent>=<model>. Repeatable.",
+      valueName: "agent=model"))
+  var agentModel: [String] = []
+
   func run() async throws {
     let service = try makeService()
     let sessionStore = SessionStore()
@@ -166,7 +176,14 @@ struct Interactive: AsyncParsableCommand {
     let mcp = await MCPSetup.connect(enabled: !noMcp, spinner: spinner, quiet: true)
     let skills = noSkills ? [] : SkillLibrary.discover()
     let skillTools: [any AgentTool] = skills.isEmpty ? [] : [SkillTool(skills: skills)]
-    let tools = Session.defaultTools + skillTools + mcp.tools
+    let agents = noAgents ? [] : AgentLibrary.discover()
+    let taskTool: TaskTool? = agents.isEmpty ? nil : TaskTool(
+      agents: agents,
+      service: service,
+      tools: Session.defaultTools + skillTools + mcp.tools,
+      permissions: permissions,
+      modelOverrides: try Self.parseAgentModels(agentModel))
+    let tools = Session.defaultTools + skillTools + mcp.tools + (taskTool.map { [$0] } ?? [])
     let mcpServers = Set(mcp.tools.compactMap { ($0 as? MCPTool)?.server }).count
 
     var session: Session
@@ -186,6 +203,7 @@ struct Interactive: AsyncParsableCommand {
         mcpServers: mcpServers,
         mcpTools: mcp.tools.count,
         skills: skills.count,
+        agents: agents.count,
         resumeLine: "resumed \(label) · \(loaded.messages.count) messages · \(Renderer.usd(loaded.costUSD))"))
     } else {
       session = Session(
@@ -200,7 +218,8 @@ struct Interactive: AsyncParsableCommand {
         dialect: "auto",
         mcpServers: mcpServers,
         mcpTools: mcp.tools.count,
-        skills: skills.count))
+        skills: skills.count,
+        agents: agents.count))
     }
 
     // At the prompt, raw mode owns Ctrl-C as a byte; during a turn, this source
@@ -221,6 +240,14 @@ struct Interactive: AsyncParsableCommand {
       historyURL: URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".arnes/history"))
     reader.screen = screen
     let renderer = Renderer(screen: screen.isActive ? screen : nil)
+
+    // Subagent progress renders nested through the same renderer; the inherited
+    // model is re-bound whenever the live session changes (/resume swaps it).
+    taskTool?.onEvent = { event in renderer.render(event) }
+    let bindAgents: (Session) -> Void = { bound in
+      taskTool?.parentModel = { await bound.model }
+    }
+    bindAgents(session)
 
     // Ctrl-O toggles concise/verbose tool output — mid-turn via the key watcher,
     // at the prompt via the line reader.
@@ -296,6 +323,7 @@ struct Interactive: AsyncParsableCommand {
             permissions: permissions, sessionStore: sessionStore, fallbacks: fallbacks, screen: screen)
           {
             session = switched
+            bindAgents(session)
           }
           continue
         }
@@ -310,7 +338,7 @@ struct Interactive: AsyncParsableCommand {
           absorbTypeahead()
           continue
         }
-        if await handle(command, session: session, spinner: spinner, screen: screen, skills: skills) { break }
+        if await handle(command, session: session, spinner: spinner, screen: screen, skills: skills, taskTool: taskTool) { break }
         continue
       }
       await runTurn(text, session: session, renderer: renderer, interrupts: interrupts, spinner: spinner, keys: keys, screen: screen)
@@ -379,8 +407,21 @@ struct Interactive: AsyncParsableCommand {
 
   // MARK: Slash commands
 
+  /// Parses repeatable `--agent-model <agent>=<model>` pins.
+  static func parseAgentModels(_ raw: [String]) throws -> [String: String] {
+    var overrides: [String: String] = [:]
+    for entry in raw {
+      let parts = entry.split(separator: "=", maxSplits: 1).map(String.init)
+      guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else {
+        throw ValidationError("--agent-model expects <agent>=<model>, got \"\(entry)\"")
+      }
+      overrides[parts[0]] = parts[1]
+    }
+    return overrides
+  }
+
   /// Returns true when the REPL should exit.
-  private func handle(_ command: SlashCommand, session: Session, spinner: Spinner, screen: Screen, skills: [Skill]) async -> Bool {
+  private func handle(_ command: SlashCommand, session: Session, spinner: Spinner, screen: Screen, skills: [Skill], taskTool: TaskTool?) async -> Bool {
     switch command {
     case .model(let query):
       await handleModel(query, session: session, spinner: spinner, screen: screen)
@@ -457,6 +498,9 @@ struct Interactive: AsyncParsableCommand {
         screen.print(rows.joined(separator: "\n"))
       }
 
+    case .agents(let argument):
+      await handleAgents(argument, taskTool: taskTool, session: session, spinner: spinner, screen: screen)
+
     case .help:
       screen.print(SlashCommand.helpText)
 
@@ -467,6 +511,71 @@ struct Interactive: AsyncParsableCommand {
       return true
     }
     return false
+  }
+
+  /// `/agents` — list subagents and their models; `/agents <name> <model>` pins one
+  /// (fuzzy-resolved, with feedback); `/agents <name> inherit` follows the session
+  /// model again. The user controls subagent models — the lead model never does.
+  private func handleAgents(
+    _ argument: String?,
+    taskTool: TaskTool?,
+    session: Session,
+    spinner: Spinner,
+    screen: Screen)
+    async
+  {
+    guard let taskTool else {
+      screen.print(ANSI.dim("subagents are disabled — restart without --no-agents"))
+      return
+    }
+    let home = NSHomeDirectory()
+    guard let argument, !argument.isEmpty else {
+      for agent in taskTool.agents {
+        let model = taskTool.configuredModel(for: agent)
+        screen.print("\(ANSI.bold(agent.name))  \(ANSI.cyan(model))")
+        if !agent.description.isEmpty {
+          screen.print(ANSI.dim("  \(agent.description)"))
+        }
+        let origin = agent.source.map {
+          $0.path.hasPrefix(home) ? "~" + $0.path.dropFirst(home.count) : $0.path
+        } ?? "built-in"
+        screen.print(ANSI.dim("  \(origin)"))
+      }
+      screen.print(ANSI.dim(
+        "the model delegates via the task tool · pin a model with /agents <name> <model>"))
+      return
+    }
+    let parts = argument.split(separator: " ", maxSplits: 1).map(String.init)
+    let name = parts[0]
+    guard let agent = taskTool.agents.first(where: { $0.name == name }) else {
+      screen.print(ANSI.dim("no agent named '\(name)' — /agents lists them"))
+      return
+    }
+    guard parts.count == 2 else {
+      screen.print("\(ANSI.bold(agent.name)) runs on \(ANSI.cyan(taskTool.configuredModel(for: agent)))")
+      return
+    }
+    let query = parts[1]
+    if query.lowercased() == "inherit" {
+      taskTool.setModelOverride(agent: name, model: "inherit")
+      screen.print("\(ANSI.bold(name)) → inherits the session model")
+      return
+    }
+    spinner.start("searching models")
+    defer { spinner.stop() }
+    do {
+      let results = try await session.searchModels(query, limit: 1)
+      spinner.stop()
+      guard let best = results.first else {
+        screen.print(ANSI.dim("no models match \"\(query)\" — try `arnes models \(query)`"))
+        return
+      }
+      taskTool.setModelOverride(agent: name, model: best.id)
+      screen.print("\(ANSI.bold(name)) → \(ANSI.cyan(best.id))\(best.id == query ? "" : ANSI.dim(" (matched \"\(query)\")"))")
+    } catch {
+      spinner.stop()
+      screen.print(ANSI.red("model search failed: \(error)"))
+    }
   }
 
   private func handleModel(_ query: String?, session: Session, spinner: Spinner, screen: Screen) async {

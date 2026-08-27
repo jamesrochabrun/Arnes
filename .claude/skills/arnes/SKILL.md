@@ -97,6 +97,33 @@ arnes do "..." --no-skills     # run without skills
   arg string, `$1`–`$9` the whitespace-split positionals, and a body with no placeholders
   gets the args appended. Built-in slash commands win over a skill of the same name.
 
+## Subagents — "give the agent a subagent" / "delegate with a cheaper model"
+
+```bash
+arnes agents                     # list discovered subagents (name, model, tools, source)
+arnes do "..." --no-agents       # run without subagents (no task tool)
+arnes do "..." --agent-model reviewer=deepseek/deepseek-v4-flash   # pin an agent's model (repeatable)
+```
+
+- A subagent is a `<name>.md` file (YAML frontmatter `name`/`description` + optional
+  `model`/`tools`, markdown body = its system prompt — the Claude Code agent format, so
+  existing `.claude/agents` files work unchanged). Discovery order, first name wins:
+  `./.arnes/agents/`, `./.claude/agents/`, `~/.arnes/agents/`. Two built-ins work with
+  zero files (both inherit the session model, shadowable by name): `general` (full
+  toolset) and `explore` (read-only fan-out search — read_file/grep/glob only).
+- The loop puts only names + descriptions in the system prompt; the model delegates with
+  the `task` tool (`agent` + `task` strings). The subagent runs a nested session — fresh
+  context, its own model, tools capped to its allowlist and never the task tool (one level
+  of nesting) — and only its final report returns. Its cost rolls into the parent turn,
+  and its run lands in `~/.arnes/runs.jsonl` tagged with an `agent` field.
+- The **user** decides subagent models, never the lead model: `model:` frontmatter
+  (slug, fuzzy query like `sonnet`, or `inherit`), `--agent-model name=model` on
+  `do`/`interactive`, or `/agents <name> <model>` in the REPL (`/agents` lists,
+  `/agents <name> inherit` follows the session model again). Naming a model in the
+  prompt ("use deepseek for the subagents") also works — the lead relays it via the
+  task tool's optional `model` field. Precedence: pin (`--agent-model`/`/agents`) >
+  in-prompt request > frontmatter > inherit. `arnes agents` needs no API key.
+
 ## Conformance probe — "probe a model"
 
 ```bash

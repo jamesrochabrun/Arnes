@@ -57,7 +57,7 @@ struct Arnes: AsyncParsableCommand {
     commandName: "arnes",
     abstract: "Arnes — a model-adaptive agent harness for OpenRouter.",
     version: arnesVersion,
-    subcommands: [Interactive.self, Chat.self, Do.self, Resume.self, Models.self, Status.self, Runs.self, Sessions.self, Eval.self, Evals.self, Probe.self, Mcp.self, Skills.self],
+    subcommands: [Interactive.self, Chat.self, Do.self, Resume.self, Models.self, Status.self, Runs.self, Sessions.self, Eval.self, Evals.self, Probe.self, Mcp.self, Skills.self, Agents.self],
     defaultSubcommand: Interactive.self)
 }
 
@@ -139,6 +139,16 @@ struct Do: AsyncParsableCommand {
   @Flag(help: "Skip loading skills from .arnes/skills, .claude/skills, and ~/.arnes/skills.")
   var noSkills = false
 
+  @Flag(help: "Disable subagents (the task tool and .arnes/.claude agents).")
+  var noAgents = false
+
+  @Option(
+    name: .customLong("agent-model"),
+    help: ArgumentHelp(
+      "Pin a subagent to a model: <agent>=<model>. Repeatable.",
+      valueName: "agent=model"))
+  var agentModel: [String] = []
+
   func run() async throws {
     let service = try makeService()
     if panel != nil {
@@ -150,10 +160,35 @@ struct Do: AsyncParsableCommand {
     let mcp = await MCPSetup.connect(enabled: !noMcp)
     let skills = noSkills ? [] : SkillLibrary.discover()
     let skillTools: [any AgentTool] = skills.isEmpty ? [] : [SkillTool(skills: skills)]
-    let agent = Agent(
+    let permissions: any PermissionDelegate = safe ? DenyMutationsPermissions() : AutoApprovePermissions()
+    let subagents = noAgents ? [] : AgentLibrary.discover()
+    let taskTool: TaskTool? = subagents.isEmpty ? nil : TaskTool(
+      agents: subagents,
       service: service,
       tools: Session.defaultTools + skillTools + mcp.tools,
-      permissions: safe ? DenyMutationsPermissions() : AutoApprovePermissions())
+      permissions: permissions,
+      modelOverrides: try Interactive.parseAgentModels(agentModel))
+    // Inherited subagents follow the requested model; headless runs never swap it.
+    let requestedModel = model
+    taskTool?.parentModel = { requestedModel }
+    taskTool?.onEvent = { event in
+      switch event {
+      case .subagentStarted(let name, let model, let task):
+        print("◇ \(name) (\(model)) \(task.prefix(80))")
+      case .subagent(let name, .toolCall(let tool, let arguments)):
+        print("  ∙ [\(name)] \(tool) \(arguments.prefix(100))")
+      case .subagent(let name, .stepLimitReached(let maxSteps)):
+        print("  ⚠ [\(name)] hit its step limit (\(maxSteps))")
+      case .subagentFinished(let name, let steps, let toolCalls, let costUSD, _):
+        print("◆ \(name) · \(steps) steps · \(toolCalls) tools · $\(String(format: "%.4f", costUSD))")
+      default:
+        break
+      }
+    }
+    let agent = Agent(
+      service: service,
+      tools: Session.defaultTools + skillTools + mcp.tools + (taskTool.map { [$0] } ?? []),
+      permissions: permissions)
     let result = try await agent.run(
       task: task,
       model: model,
@@ -184,6 +219,8 @@ struct Do: AsyncParsableCommand {
           print("⚠ step limit (\(maxSteps)) reached before the task finished")
         case .textDelta, .reasoningDelta, .interrupted, .turnFinished:
           break // headless output prints whole messages and its own footer
+        case .subagentStarted, .subagent, .subagentFinished:
+          break // printed by the task tool's own onEvent hook above
         }
       })
     // On a thrown run the process exits and the servers see stdin EOF, which is the

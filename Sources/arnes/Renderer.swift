@@ -144,6 +144,24 @@ final class Renderer {
       endStreamedLineIfNeeded()
       line(ANSI.dim("◈ context compacted: \(summarized) older messages summarized · \(kept) kept verbatim"))
 
+    case .subagentStarted(let name, let model, let task):
+      endStreamedLineIfNeeded()
+      let preview = task.replacingOccurrences(of: "\n", with: " ")
+      line(ANSI.cyan("◇ \(name) ") + ANSI.dim("(\(model)) \(String(preview.prefix(80)))\(preview.count > 80 ? "…" : "")"))
+
+    case .subagent(let name, let event):
+      renderNested(name, event)
+
+    case .subagentFinished(let name, let steps, let toolCalls, let costUSD, let preview):
+      endStreamedLineIfNeeded()
+      var footer = ANSI.cyan("◆ \(name)")
+        + ANSI.dim(" · \(steps) steps · \(toolCalls) tools · \(Self.usd(costUSD))")
+      if !verbose, !preview.isEmpty, preview != "failed" {
+        let first = preview.split(separator: "\n").first.map(String.init) ?? preview
+        footer += ANSI.dim(" · \(String(first.prefix(60)))\(first.count > 60 ? "…" : "")")
+      }
+      line(footer)
+
     case .turnFinished(let stats):
       endStreamedLineIfNeeded()
       let served = stats.routedModels.joined(separator: ", ")
@@ -156,6 +174,55 @@ final class Renderer {
         footer += " · ctx \(used * 100 / context)%"
       }
       line(ANSI.dim(footer))
+    }
+  }
+
+  /// A subagent's own loop events, rendered indented under its ◇ start line. The
+  /// subagent's streamed prose stays hidden — only its tool activity and hiccups
+  /// show; the distilled report lands on the ◆ finish line and goes to the lead.
+  private func renderNested(_ name: String, _ event: AgentEvent) {
+    switch event {
+    case .toolCall(let tool, let arguments):
+      endStreamedLineIfNeeded()
+      if verbose {
+        line(ANSI.dim("  → \(tool) \(String(arguments.prefix(110)))"))
+      } else {
+        line(ANSI.dim("  ∙ \(tool) \(Self.conciseArguments(arguments))"))
+      }
+
+    case .toolResult(let tool, let preview):
+      let firstLine = preview.split(separator: "\n").first.map(String.init) ?? preview
+      if verbose {
+        line(ANSI.dim("  ← \(tool): \(String(firstLine.prefix(110)))"))
+      } else if firstLine.hasPrefix("error") || firstLine.hasPrefix("user denied") {
+        line(ANSI.red("  ✗ \(tool): \(String(firstLine.prefix(110)))"))
+      }
+
+    case .toolDenied(let tool, _):
+      line(ANSI.yellow("  ⊘ \(tool) denied"))
+
+    case .routed(let model, let provider):
+      if verbose {
+        line(ANSI.dim("  ⇄ \(model)\(provider.map { " (\($0))" } ?? "")"))
+      }
+
+    case .dialectFellBack(let dialect, _):
+      line(ANSI.dim("  ⤵ \(dialect) fell back to chat"))
+
+    case .nudged:
+      if verbose {
+        line(ANSI.dim("  ↻ \(name) nudged to continue"))
+      }
+
+    case .stepLimitReached(let maxSteps):
+      line(ANSI.yellow("  ⚠ \(name) hit its step limit (\(maxSteps)) — report may be incomplete"))
+
+    case .compacted(let summarized, _):
+      line(ANSI.dim("  ◈ \(name) compacted \(summarized) messages"))
+
+    case .textDelta, .reasoningDelta, .assistantText, .verifier, .interrupted,
+         .turnFinished, .subagentStarted, .subagent, .subagentFinished:
+      break // prose stays in the subagent's context; the finish line carries the summary
     }
   }
 

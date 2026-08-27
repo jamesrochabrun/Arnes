@@ -11,6 +11,8 @@ enum SlashCommand {
   case clear
   case status
   case skills
+  /// `/agents` lists subagents; `/agents <name> <model>` pins one to a model.
+  case agents(argument: String?)
   case help
   case exit
   /// Not a built-in — the REPL tries skill names before reporting it (original case kept).
@@ -36,6 +38,7 @@ enum SlashCommand {
     case "clear": return .clear
     case "status": return .status
     case "skills": return .skills
+    case "agents": return .agents(argument: argument)
     case "help": return .help
     case "exit", "quit", "q": return .exit
     default: return .unknown(name: parts.first.map(String.init) ?? command, argument: argument)
@@ -52,6 +55,8 @@ enum SlashCommand {
     /clear           clear the conversation history
     /status          session id, model, messages, cost
     /skills          list loaded skills (the model invokes them via the skill tool)
+    /agents          list subagents; /agents <name> <model> pins one to a model this session
+                     (/agents <name> inherit follows the session model again)
     /<skill> [args]  run a skill by name — args fill $ARGUMENTS and $1–$9 in its body
     /help            this help
     /exit            leave (also Ctrl-D, or Ctrl-C twice on an empty line)

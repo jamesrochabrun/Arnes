@@ -42,6 +42,8 @@ public struct RunRecord: Codable, Sendable {
   public var sessionId: String?
   /// Zero-based turn number within the session.
   public var turnIndex: Int?
+  /// Subagent name when this run was delegated via the task tool; nil for lead runs.
+  public var agent: String?
 
   public init(
     task: String,
@@ -79,6 +81,7 @@ public struct RunRecord: Codable, Sendable {
     summary = try container.decodeIfPresent(String.self, forKey: .summary)
     sessionId = try container.decodeIfPresent(String.self, forKey: .sessionId)
     turnIndex = try container.decodeIfPresent(Int.self, forKey: .turnIndex)
+    agent = try container.decodeIfPresent(String.self, forKey: .agent)
   }
 }
 

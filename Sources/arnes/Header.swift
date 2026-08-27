@@ -21,6 +21,7 @@ enum Header {
     mcpServers: Int = 0,
     mcpTools: Int = 0,
     skills: Int = 0,
+    agents: Int = 0,
     resumeLine: String? = nil)
     -> String
   {
@@ -42,6 +43,9 @@ enum Header {
     }
     if skills > 0 {
       info += " · \(skills) skill\(skills == 1 ? "" : "s")"
+    }
+    if agents > 0 {
+      info += " · \(agents) agent\(agents == 1 ? "" : "s")"
     }
     lines.append((info, ANSI.dim(info)))
     if let resumeLine { lines.append((resumeLine, ANSI.dim(resumeLine))) }

@@ -19,6 +19,21 @@ public protocol AgentTool: Sendable {
   func execute(arguments: [String: JSONValue]) async throws -> String
 }
 
+/// A tool that contributes a section to the system prompt (skill and subagent
+/// listings). Sections ride every request so the model knows what it can reach for.
+public protocol PromptContributing {
+  /// The section text; empty when there is nothing to list.
+  var promptSection: String { get }
+}
+
+/// A tool whose execution spends money on nested model calls (the task tool). The
+/// session drains the accrued amount after each call so subagent spend lands in the
+/// parent turn's cost and `RunRecord`.
+public protocol CostReportingTool {
+  /// Returns the USD accrued since the last drain and resets the accumulator.
+  func drainAccruedCost() -> Double
+}
+
 extension AgentTool {
   /// The OpenRouter chat tool definition for this tool.
   public var toolDefinition: Tool {

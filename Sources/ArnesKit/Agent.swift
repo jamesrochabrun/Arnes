@@ -39,6 +39,13 @@ public enum AgentEvent: Sendable {
   case stepLimitReached(maxSteps: Int)
   /// Older history was auto-summarized because the context was nearly full.
   case compacted(summarizedMessages: Int, keptMessages: Int)
+  /// A subagent was spawned by the task tool; `model` is the resolved slug it runs on.
+  case subagentStarted(name: String, model: String, task: String)
+  /// A subagent's own loop event, wrapped so UIs can render it nested. Fired while
+  /// the parent turn waits on the task tool call.
+  indirect case subagent(name: String, event: AgentEvent)
+  /// The subagent finished; its report went back to the caller as the tool result.
+  case subagentFinished(name: String, steps: Int, toolCalls: Int, costUSD: Double, resultPreview: String)
   /// The turn completed; footer numbers for rendering.
   case turnFinished(Session.TurnStats)
 }
