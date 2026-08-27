@@ -12,7 +12,7 @@ struct Agents: AsyncParsableCommand {
     let agents = AgentLibrary.discover()
     let home = NSHomeDirectory()
     for agent in agents {
-      print("\(ANSI.bold(agent.name))  \(ANSI.cyan(agent.model ?? "inherit"))")
+      print("\(ANSI.bold(agent.name))  \(ANSI.secondary(agent.model ?? "inherit"))")
       if !agent.description.isEmpty { print("  \(agent.description)") }
       if let tools = agent.tools { print(ANSI.dim("  tools: \(tools.joined(separator: ", "))")) }
       let origin = agent.source.map {

@@ -65,7 +65,7 @@ Sources/arnes/             # the CLI
   AgentsCommand.swift      # `arnes agents` — list discovered subagents (name, model, tools, source)
   Interactive.swift        # REPL: turns, slash commands, SIGINT→cancel, TerminalPermissions
   Header.swift             # session-start banner box (model, dialect, cwd, MCP; plain line when piped)
-  Screen.swift             # pinned bottom input box + status line; transcript commits above (redraw-below, scrollback intact; passthrough when piped)
+  Screen.swift             # pinned bottom input box + status line + above-box info line (usage/agents left, model right) + OSC 11 background detection; transcript commits above (redraw-below, scrollback intact; passthrough when piped)
   LineReader.swift         # raw-mode line editor + history, drawn in the Screen box (readLine() fallback when piped)
   KeyWatcher.swift         # mid-turn stdin: Ctrl-O verbosity toggle, Ctrl-C cancel, live type-ahead queue; feeds permission prompts
   Renderer.swift           # AgentEvent → terminal via Screen; concise tool lines (Ctrl-O for verbose); cost/route status line per turn
@@ -150,8 +150,13 @@ Bun installs work). `scripts/npm-release.sh` generates the publishable dirs; aut
 - [x] Pinned input bar — `Screen`: the transcript flows top-to-bottom into native
       scrollback while a bordered input box (+ spinner/status line) stays redrawn at the
       bottom; mid-turn typing is visible live with an "N queued" tag instead of blind
-      type-ahead; permission prompts ask via the status line. TTY-only — piped sessions
-      keep the plain line-by-line output
+      type-ahead; permission prompts ask via the status line; an always-visible info
+      line above the box shows session cost + ctx % and live subagent activity on the
+      left with the active model (and where auto actually routed) right-aligned
+      (`StatusInfo` in Interactive.swift). The palette adapts to the terminal theme:
+      OSC 11 background detection (COLORFGBG fallback) darkens the chartreuse accent
+      on light backgrounds, and a violet `ANSI.secondary` contrasts it for routing/
+      subagent highlights. TTY-only — piped sessions keep the plain line-by-line output
 - [ ] Cached model profiles (manifest still fetched per process)
 - [ ] Panel policy triggers (e.g. auto-panel after verifier rejections)
 - [x] Subagents — `.md` agent files (frontmatter name/description/model/tools + body as

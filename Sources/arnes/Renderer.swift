@@ -119,7 +119,7 @@ final class Renderer {
 
     case .routed(let model, let provider):
       endStreamedLineIfNeeded()
-      line(ANSI.cyan("⇄ \(model)\(provider.map { " (\($0))" } ?? "")"))
+      line(ANSI.secondary("⇄ \(model)\(provider.map { " (\($0))" } ?? "")"))
 
     case .dialectFellBack(let dialect, let reason):
       endStreamedLineIfNeeded()
@@ -147,14 +147,14 @@ final class Renderer {
     case .subagentStarted(let name, let model, let task):
       endStreamedLineIfNeeded()
       let preview = task.replacingOccurrences(of: "\n", with: " ")
-      line(ANSI.cyan("◇ \(name) ") + ANSI.dim("(\(model)) \(String(preview.prefix(80)))\(preview.count > 80 ? "…" : "")"))
+      line(ANSI.secondary("◇ \(name) ") + ANSI.dim("(\(model)) \(String(preview.prefix(80)))\(preview.count > 80 ? "…" : "")"))
 
     case .subagent(let name, let event):
       renderNested(name, event)
 
     case .subagentFinished(let name, let steps, let toolCalls, let costUSD, let preview):
       endStreamedLineIfNeeded()
-      var footer = ANSI.cyan("◆ \(name)")
+      var footer = ANSI.secondary("◆ \(name)")
         + ANSI.dim(" · \(steps) steps · \(toolCalls) tools · \(Self.usd(costUSD))")
       if !verbose, !preview.isEmpty, preview != "failed" {
         let first = preview.split(separator: "\n").first.map(String.init) ?? preview

@@ -28,6 +28,8 @@ final class Screen: @unchecked Sendable {
   private var cursor = 0
   private var queued = 0        // completed type-ahead lines waiting to run
   private var placeholder = Screen.idlePlaceholder
+  private var infoLeft = ""     // usage / activity, above the box's left edge
+  private var infoRight = ""    // active model, right-aligned above the box
   /// Visible width of each region line as last drawn — erasing recomputes how many
   /// physical rows each occupies at the *current* width, so a resize that rewrapped
   /// them (terminal reflow) is healed instead of corrupting the cursor math.
@@ -47,6 +49,52 @@ final class Screen: @unchecked Sendable {
 
   static let idlePlaceholder = "message · /help for commands"
   static let busyPlaceholder = "type to queue · esc interrupts"
+
+  /// Asks the terminal for its background color (OSC 11) and flips `ANSI.lightBackground`
+  /// so the palette darkens on light themes. Call once at startup, before any styled
+  /// output and before `measureOrigin` — the reply arrives on stdin. Terminals that
+  /// don't answer keep the COLORFGBG-seeded default after a short timeout.
+  func detectBackground() {
+    guard isActive else { return }
+    lock.lock()
+    defer { lock.unlock() }
+    var original = termios()
+    tcgetattr(STDIN_FILENO, &original)
+    var raw = original
+    raw.c_lflag &= ~tcflag_t(ICANON | ECHO)
+    tcsetattr(STDIN_FILENO, TCSANOW, &raw)
+    defer {
+      var restore = original
+      tcsetattr(STDIN_FILENO, TCSANOW, &restore)
+    }
+    write("\u{1B}]11;?\u{07}")
+    // Reply: ESC ] 11 ; rgb:RRRR/GGGG/BBBB terminated by BEL or ST (ESC \).
+    var response: [UInt8] = []
+    var attempts = 0
+    while attempts < 30, response.last != 0x07, response.last != UInt8(ascii: "\\") {
+      var fds = pollfd(fd: STDIN_FILENO, events: Int16(POLLIN), revents: 0)
+      guard poll(&fds, 1, 10) > 0, fds.revents & Int16(POLLIN) != 0 else {
+        attempts += 1
+        continue
+      }
+      var byte: UInt8 = 0
+      guard read(STDIN_FILENO, &byte, 1) == 1 else { break }
+      response.append(byte)
+    }
+    let text = String(decoding: response, as: UTF8.self)
+    guard let range = text.range(of: "rgb:") else { return }
+    let channels = text[range.upperBound...]
+      .prefix(while: { $0.isHexDigit || $0 == "/" })
+      .split(separator: "/")
+      .compactMap { part -> UInt32? in
+        guard let value = UInt32(part, radix: 16) else { return nil }
+        // Channels arrive as 1–4 hex digits; scale everything to 16-bit.
+        return part.count < 4 ? value << (4 * (4 - part.count)) : value
+      }
+    guard channels.count == 3 else { return }
+    let luminance = 0.299 * Double(channels[0]) + 0.587 * Double(channels[1]) + 0.114 * Double(channels[2])
+    ANSI.lightBackground = luminance > 32767
+  }
 
   /// Asks the terminal where the cursor is (DSR `ESC[6n`) so the first bar draw can
   /// pad down to the window's bottom rows. Call once at startup, before any output
@@ -183,6 +231,19 @@ final class Screen: @unchecked Sendable {
     repaint()
   }
 
+  /// The always-visible line above the input box: usage/activity on the left, the
+  /// active model right-aligned. Stored as segments and composed at draw time so a
+  /// resize re-fits the alignment instead of freezing stale padding.
+  func setInfo(left: String, right: String) {
+    guard isActive, !closed else { return }
+    lock.lock()
+    defer { lock.unlock() }
+    guard left != infoLeft || right != infoRight else { return }
+    infoLeft = left
+    infoRight = right
+    repaint()
+  }
+
   func setPlaceholder(_ text: String) {
     guard isActive, !closed else { return }
     lock.lock()
@@ -270,6 +331,22 @@ final class Screen: @unchecked Sendable {
       // with the next line and break the erase math.
       let boxWidth = columns - 1
       let inner = boxWidth - 4 // "│ " … " │"
+      if !infoLeft.isEmpty || !infoRight.isEmpty {
+        // Usage/activity + model ride just above the box, out of the border's way.
+        let leftWidth = ANSIText.visibleCount(infoLeft)
+        let rightWidth = ANSIText.visibleCount(infoRight)
+        let info: String
+        if 2 + leftWidth + 1 + rightWidth <= boxWidth {
+          info = "  " + infoLeft
+            + String(repeating: " ", count: boxWidth - 2 - leftWidth - rightWidth)
+            + infoRight
+        } else {
+          // Too narrow to align: keep the tail (the model slug ends the line).
+          info = "  " + ANSIText.clampTail(infoLeft + " " + infoRight, to: boxWidth - 2)
+        }
+        lines.append(info)
+        widths.append(ANSIText.visibleCount(info))
+      }
       let label = queued > 0 ? " \(queued) queued " : ""
       lines.append(ANSI.accent("╭─") + ANSI.dim(label)
         + ANSI.accent(String(repeating: "─", count: max(0, boxWidth - 3 - label.count)) + "╮"))

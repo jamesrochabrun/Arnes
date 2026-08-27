@@ -93,6 +93,105 @@ struct TerminalPermissions: PermissionDelegate {
   }
 }
 
+// MARK: - StatusInfo
+
+/// Feeds the always-visible line above the input box: session usage (cost, ctx %) and
+/// live subagent activity on the left, the active model right-aligned. Observed from
+/// the turn's event stream, mutated from slash commands — hence the lock.
+final class StatusInfo: @unchecked Sendable {
+  private let lock = NSLock()
+  private let screen: Screen
+  private var model = ""
+  private var routedModel: String?  // where the last request actually landed
+  private var sessionCostUSD = 0.0
+  private var contextPercent: Int?
+  private var activeAgents: [String] = []
+
+  init(screen: Screen) {
+    self.screen = screen
+  }
+
+  func setModel(_ model: String) {
+    lock.lock()
+    if model != self.model {
+      self.model = model
+      routedModel = nil // a swap invalidates where the old model was routing
+    }
+    lock.unlock()
+    refresh()
+  }
+
+  /// Seeds the cost display when resuming a saved session mid-flight.
+  func setSessionCost(_ usd: Double) {
+    lock.lock()
+    sessionCostUSD = usd
+    lock.unlock()
+    refresh()
+  }
+
+  /// An interrupted turn can end without a `turnFinished` — drop stale activity.
+  func turnEnded() {
+    lock.lock()
+    activeAgents.removeAll()
+    lock.unlock()
+    refresh()
+  }
+
+  func observe(_ event: AgentEvent) {
+    lock.lock()
+    switch event {
+    case .routed(let model, _):
+      routedModel = model
+    case .subagentStarted(let name, _, _):
+      activeAgents.append(name)
+    case .subagentFinished(let name, _, _, _, _):
+      if let index = activeAgents.firstIndex(of: name) {
+        activeAgents.remove(at: index)
+      }
+    case .turnFinished(let stats):
+      sessionCostUSD = stats.sessionCostUSD
+      if let served = stats.routedModels.last, !served.isEmpty {
+        routedModel = served
+      }
+      if let used = stats.promptTokens, let context = stats.contextLength, context > 0 {
+        contextPercent = used * 100 / context
+      }
+      activeAgents.removeAll() // a finished turn has no agents in flight
+    default:
+      lock.unlock()
+      return
+    }
+    lock.unlock()
+    refresh()
+  }
+
+  private func refresh() {
+    lock.lock()
+    var left = ANSI.dim(Renderer.usd(sessionCostUSD))
+    if let contextPercent {
+      left += ANSI.dim(" · ctx \(contextPercent)%")
+    }
+    if !activeAgents.isEmpty {
+      // Duplicates collapse to a count so parallel same-agent tasks stay short.
+      var seen: [String] = []
+      for name in activeAgents where !seen.contains(name) {
+        seen.append(name)
+      }
+      let names = seen.map { name in
+        let count = activeAgents.filter { $0 == name }.count
+        return count > 1 ? "\(name)×\(count)" : name
+      }
+      left += ANSI.dim(" · ") + ANSI.secondary("✳ \(names.joined(separator: " "))")
+    }
+    var right = ANSI.dim(model)
+    if let routedModel, routedModel != model {
+      right += ANSI.dim(" → ") + ANSI.secondary(routedModel)
+    }
+    lock.unlock()
+    screen.setInfo(left: left, right: right)
+  }
+}
+
 // MARK: - InterruptController
 
 /// Bridges SIGINT to cancellation of the in-flight turn's task.
@@ -162,6 +261,7 @@ struct Interactive: AsyncParsableCommand {
     // The pinned bottom bar: transcript scrolls above it, input/status stay below.
     // Inactive when either fd is piped, leaving output identical to plain printing.
     let screen = Screen()
+    screen.detectBackground() // darkens the palette on light terminal themes
     screen.measureOrigin()
     screen.startAtTop()
     if screen.isActive {
@@ -241,6 +341,13 @@ struct Interactive: AsyncParsableCommand {
     reader.screen = screen
     let renderer = Renderer(screen: screen.isActive ? screen : nil)
 
+    // The line above the input box: usage + subagent activity left, model right.
+    let info = StatusInfo(screen: screen)
+    if let loaded = requested {
+      info.setSessionCost(loaded.costUSD)
+    }
+    info.setModel(await session.model)
+
     // Subagent progress renders nested through the same renderer; the inherited
     // model is re-bound whenever the live session changes (/resume swaps it).
     taskTool?.onEvent = { event in renderer.render(event) }
@@ -295,11 +402,14 @@ struct Interactive: AsyncParsableCommand {
         screen.print(ANSI.dim("hint: \"\(name)\" is a saved session — did you mean: arnes resume \(name)"))
       }
       screen.print("› \(prompt)")
-      await runTurn(prompt, session: session, renderer: renderer, interrupts: interrupts, spinner: spinner, keys: keys, screen: screen)
+      await runTurn(prompt, session: session, renderer: renderer, info: info, interrupts: interrupts, spinner: spinner, keys: keys, screen: screen)
       absorbTypeahead()
     }
 
     while true {
+      // /model, /resume, /verify, /compact all move these between turns.
+      info.setModel(await session.model)
+      info.setSessionCost(await session.costUSD)
       let text: String
       var echoed = false
       if !queued.isEmpty {
@@ -333,7 +443,7 @@ struct Interactive: AsyncParsableCommand {
         {
           await runTurn(
             skill.invocationPrompt(arguments: argument),
-            session: session, renderer: renderer, interrupts: interrupts,
+            session: session, renderer: renderer, info: info, interrupts: interrupts,
             spinner: spinner, keys: keys, screen: screen)
           absorbTypeahead()
           continue
@@ -341,7 +451,7 @@ struct Interactive: AsyncParsableCommand {
         if await handle(command, session: session, spinner: spinner, screen: screen, skills: skills, taskTool: taskTool) { break }
         continue
       }
-      await runTurn(text, session: session, renderer: renderer, interrupts: interrupts, spinner: spinner, keys: keys, screen: screen)
+      await runTurn(text, session: session, renderer: renderer, info: info, interrupts: interrupts, spinner: spinner, keys: keys, screen: screen)
       absorbTypeahead()
     }
     await mcp.provider.shutdown()
@@ -355,6 +465,7 @@ struct Interactive: AsyncParsableCommand {
     _ text: String,
     session: Session,
     renderer: Renderer,
+    info: StatusInfo,
     interrupts: InterruptController,
     spinner: Spinner,
     keys: KeyWatcher,
@@ -374,6 +485,7 @@ struct Interactive: AsyncParsableCommand {
         for try await event in await session.send(text) {
           spinner.stop()
           renderer.render(event)
+          info.observe(event)
           if let label = Self.waitLabel(after: event) {
             spinner.start(label)
           }
@@ -388,6 +500,7 @@ struct Interactive: AsyncParsableCommand {
     await task.value
     interrupts.set(nil)
     spinner.stop()
+    info.turnEnded()
   }
 
   /// What to show while waiting for the next event — nil while text is streaming,
@@ -532,7 +645,7 @@ struct Interactive: AsyncParsableCommand {
     guard let argument, !argument.isEmpty else {
       for agent in taskTool.agents {
         let model = taskTool.configuredModel(for: agent)
-        screen.print("\(ANSI.bold(agent.name))  \(ANSI.cyan(model))")
+        screen.print("\(ANSI.bold(agent.name))  \(ANSI.secondary(model))")
         if !agent.description.isEmpty {
           screen.print(ANSI.dim("  \(agent.description)"))
         }
@@ -552,7 +665,7 @@ struct Interactive: AsyncParsableCommand {
       return
     }
     guard parts.count == 2 else {
-      screen.print("\(ANSI.bold(agent.name)) runs on \(ANSI.cyan(taskTool.configuredModel(for: agent)))")
+      screen.print("\(ANSI.bold(agent.name)) runs on \(ANSI.secondary(taskTool.configuredModel(for: agent)))")
       return
     }
     let query = parts[1]
@@ -571,7 +684,7 @@ struct Interactive: AsyncParsableCommand {
         return
       }
       taskTool.setModelOverride(agent: name, model: best.id)
-      screen.print("\(ANSI.bold(name)) → \(ANSI.cyan(best.id))\(best.id == query ? "" : ANSI.dim(" (matched \"\(query)\")"))")
+      screen.print("\(ANSI.bold(name)) → \(ANSI.secondary(best.id))\(best.id == query ? "" : ANSI.dim(" (matched \"\(query)\")"))")
     } catch {
       spinner.stop()
       screen.print(ANSI.red("model search failed: \(error)"))
