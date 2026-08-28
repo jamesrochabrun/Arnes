@@ -169,6 +169,7 @@ final class Renderer {
         ? stats.requestedModel
         : "\(stats.requestedModel) → \(served)"
       var footer = "─ \(route) · \(stats.steps) steps · \(stats.toolCalls) tools · "
+        + "\(Self.seconds(stats.durationSeconds)) · "
         + "turn \(Self.usd(stats.turnCostUSD)) · session \(Self.usd(stats.sessionCostUSD))"
       if let used = stats.promptTokens, let context = stats.contextLength, context > 0 {
         footer += " · ctx \(used * 100 / context)%"
@@ -236,6 +237,12 @@ final class Renderer {
 
   static func usd(_ value: Double) -> String {
     String(format: "$%.4f", value)
+  }
+
+  static func seconds(_ value: Double) -> String {
+    value >= 60
+      ? String(format: "%dm%02ds", Int(value) / 60, Int(value) % 60)
+      : String(format: "%.1fs", value)
   }
 
   // MARK: Concise tool lines

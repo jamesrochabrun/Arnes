@@ -1,5 +1,8 @@
 import Foundation
 import OpenRouterSwift
+#if canImport(Glibc)
+import Glibc
+#endif
 
 // MARK: - AgentTool
 
@@ -148,6 +151,12 @@ public struct BashTool: AgentTool {
     "bash: \(arguments["command"]?.stringValue ?? "?")"
   }
 
+  /// Commands may not finish on their own (waiting on stdin, hung network calls), and
+  /// the user must always be able to Esc out — so the wait is async, observes task
+  /// cancellation (SIGTERM, then SIGKILL for stubborn processes), and gives up after
+  /// `timeoutSeconds` rather than wedging the turn.
+  static let timeoutSeconds: TimeInterval = 120
+
   public func execute(arguments: [String: JSONValue]) async throws -> String {
     guard let command = arguments["command"]?.stringValue else {
       return "error: missing 'command'"
@@ -159,11 +168,95 @@ public struct BashTool: AgentTool {
     let pipe = Pipe()
     process.standardOutput = pipe
     process.standardError = pipe
+    // No terminal: commands that would sit reading stdin fail fast instead of
+    // hanging (and can't steal keystrokes from the REPL's raw-mode reader).
+    process.standardInput = FileHandle.nullDevice
     try process.run()
-    let data = pipe.fileHandleForReading.readDataToEndOfFile()
-    process.waitUntilExit()
-    let output = String(decoding: data, as: UTF8.self)
+    // Drain the pipe off-task — waiting for exit first would deadlock once a chatty
+    // command fills the pipe's buffer.
+    let reader = Task.detached { pipe.fileHandleForReading.readDataToEndOfFile() }
+    let outcome = await Self.waitForExit(process)
+    let output = String(decoding: await reader.value, as: UTF8.self)
     let truncated = output.count > 20000 ? String(output.prefix(20000)) + "\n[truncated]" : output
-    return "exit \(process.terminationStatus)\n\(truncated)"
+    switch outcome {
+    case .exited:
+      return "exit \(process.terminationStatus)\n\(truncated)"
+    case .timedOut:
+      return "error: killed after \(Int(Self.timeoutSeconds))s timeout\n\(truncated)"
+    case .cancelled:
+      return "error: interrupted by user — process killed\n\(truncated)"
+    }
+  }
+
+  private enum ExitOutcome: Sendable { case exited, timedOut, cancelled }
+
+  private static func waitForExit(_ process: Process) async -> ExitOutcome {
+    let state = ExitState()
+    return await withTaskCancellationHandler {
+      await withCheckedContinuation { (continuation: CheckedContinuation<ExitOutcome, Never>) in
+        // The termination handler is the single resume point; the timeout and
+        // cancellation paths only flag the reason and signal the process.
+        process.terminationHandler = { _ in
+          if state.claimResume() {
+            continuation.resume(returning: state.takeOutcome())
+          }
+        }
+        state.arm(process: process, timeout: timeoutSeconds)
+        // The process may have exited before the handler was installed.
+        if !process.isRunning, state.claimResume() {
+          continuation.resume(returning: state.takeOutcome())
+        }
+      }
+    } onCancel: {
+      state.killProcess(process, as: .cancelled)
+    }
+  }
+
+  /// Lock-guarded reason + single-resume bookkeeping shared between the termination
+  /// handler, the timeout timer, and the cancellation handler.
+  private final class ExitState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var outcome: ExitOutcome = .exited
+    private var resumed = false
+    private var timer: DispatchWorkItem?
+
+    func arm(process: Process, timeout: TimeInterval) {
+      let work = DispatchWorkItem { [weak self] in
+        self?.killProcess(process, as: .timedOut)
+      }
+      lock.lock()
+      timer = work
+      lock.unlock()
+      DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: work)
+    }
+
+    func killProcess(_ process: Process, as reason: ExitOutcome) {
+      lock.lock()
+      if outcome == .exited { outcome = reason }
+      lock.unlock()
+      process.terminate()
+      // SIGTERM can be ignored; escalate so the turn is guaranteed to come back.
+      let pid = process.processIdentifier
+      DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
+        if process.isRunning { _ = kill(pid, SIGKILL) }
+      }
+    }
+
+    /// True exactly once — every resume path must claim before resuming.
+    func claimResume() -> Bool {
+      lock.lock()
+      defer { lock.unlock() }
+      guard !resumed else { return false }
+      resumed = true
+      return true
+    }
+
+    func takeOutcome() -> ExitOutcome {
+      lock.lock()
+      defer { lock.unlock() }
+      timer?.cancel()
+      timer = nil
+      return outcome
+    }
   }
 }

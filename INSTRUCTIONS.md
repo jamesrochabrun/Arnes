@@ -42,7 +42,7 @@ Sources/ArnesKit/
   Dialect.swift            # ModelFamily → preferred wire dialect
   ModelProfile.swift       # capability manifest + fuzzy search (ModelCatalog actor, GET /models)
   PromptPack.swift         # base prompt + per-family adapters + ~/.arnes/packs overrides
-  AgentTool.swift          # AgentTool protocol (+ permission/summary) + read_file / write_file / bash
+  AgentTool.swift          # AgentTool protocol (+ permission/summary) + read_file / write_file / bash (async wait, Esc kills the process, 120s timeout, stdin=/dev/null)
   CodingTools.swift        # edit_file / grep / glob — the coding toolset
   Permission.swift         # ToolPermission, PermissionDecision, PermissionDelegate
   StreamAccumulator.swift  # chunk stream → text + merged tool calls + usage

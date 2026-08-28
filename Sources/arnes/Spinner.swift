@@ -8,16 +8,34 @@ final class Spinner: @unchecked Sendable {
   private let lock = NSLock()
   private var task: Task<Void, Never>?
   private var active = false
+  private var held = false
 
   /// When set (pinned-bar sessions), frames go to the bar's status line instead of
   /// being drawn inline; `stop()` sends nil to clear it.
   var sink: (@Sendable (String?) -> Void)?
 
+  /// Blocks `start()` while a prompt (permission question) owns the status line.
+  /// The renderer restarts the spinner on every event, and those restarts race the
+  /// prompt across tasks — without the hold, a "running tool" spinner can overwrite
+  /// a question the user never saw, leaving the turn silently stuck.
+  func hold() {
+    stop()
+    lock.lock()
+    held = true
+    lock.unlock()
+  }
+
+  func release() {
+    lock.lock()
+    held = false
+    lock.unlock()
+  }
+
   func start(_ label: String) {
     guard ANSI.isTTY else { return }
     lock.lock()
     defer { lock.unlock() }
-    guard !active else { return }
+    guard !active, !held else { return }
     active = true
     let startedAt = Date()
     task = Task { [weak self] in

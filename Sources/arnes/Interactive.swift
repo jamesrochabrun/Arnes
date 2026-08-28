@@ -29,7 +29,10 @@ struct TerminalPermissions: PermissionDelegate {
   }
 
   func decide(toolName: String, summary: String, argumentsJSON: String) async -> PermissionDecision {
-    spinner?.stop()
+    // Hold, don't just stop: the renderer's per-event spinner restarts race this
+    // prompt from another task, and one landing after `setStatus(question)` would
+    // overwrite the question — the user then waits on an invisible prompt.
+    spinner?.hold()
     let question = "allow? [y]es · [n]o · [a]lways this session"
     let pinned = screen?.isActive == true
     if pinned, let screen {
@@ -58,6 +61,7 @@ struct TerminalPermissions: PermissionDelegate {
     } else {
       print(shown)
     }
+    spinner?.release()
     switch answer?.lowercased() {
     case "y":
       spinner?.start("running \(toolName)")

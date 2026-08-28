@@ -96,4 +96,25 @@ final class ToolTests: XCTestCase {
     let result = try await read.execute(arguments: [:])
     XCTAssertTrue(result.contains("error"))
   }
+
+  func testBashToolStdinReadersExitInsteadOfHanging() async throws {
+    // `cat` with no arguments reads stdin forever on a terminal; with stdin on
+    // /dev/null it must return immediately instead of wedging the turn.
+    let bash = BashTool()
+    let result = try await bash.execute(arguments: ["command": .string("cat")])
+    XCTAssertTrue(result.contains("exit 0"))
+  }
+
+  func testBashToolCancellationKillsTheProcess() async throws {
+    let bash = BashTool()
+    let task = Task {
+      try await bash.execute(arguments: ["command": .string("sleep 30")])
+    }
+    try await Task.sleep(nanoseconds: 200_000_000)
+    task.cancel()
+    let started = Date()
+    let result = try await task.value
+    XCTAssertTrue(result.contains("interrupted"), "got: \(result)")
+    XCTAssertLessThan(Date().timeIntervalSince(started), 10, "cancel must not wait out the sleep")
+  }
 }

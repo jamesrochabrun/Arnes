@@ -72,6 +72,8 @@ public actor Session {
     public let promptTokens: Int?
     /// The model's context window, when the manifest knows it.
     public let contextLength: Int?
+    /// Wall-clock seconds from the turn's first request to its finish.
+    public let durationSeconds: Double
   }
 
   /// What a compaction did.
@@ -623,7 +625,8 @@ public actor Session {
       requestedModel: record.model,
       routedModels: record.routedModels,
       promptTokens: lastPromptTokens,
-      contextLength: profile.contextLength)))
+      contextLength: profile.contextLength,
+      durationSeconds: Date().timeIntervalSince(record.startedAt))))
     continuation.finish()
   }
 
