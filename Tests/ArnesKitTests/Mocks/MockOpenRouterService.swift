@@ -77,6 +77,9 @@ extension OpenRouterService {
 
 enum MockError: Error {
   case scriptExhausted
+  /// A native endpoint refusing a request with the given message — what a 400 body reads as
+  /// once the session stringifies it (`"\(error)"` includes the text).
+  case nativeRefusal(String)
 }
 
 /// Scriptable mock: streaming calls consume `chunkScripts` in order, non-streaming
@@ -88,10 +91,37 @@ final class MockOpenRouterService: OpenRouterService, @unchecked Sendable {
   /// Per-model scripts, consulted before `chunkScripts` — required when concurrent
   /// callers (panel candidates) would otherwise race on the shared queue.
   var chunkScriptsByModel: [String: [[ChatCompletionChunk]]] = [:]
+  /// Consulted ahead of both queues when set: a script chosen from the request itself (its
+  /// messages tell a run's first step from its second), so concurrent runs over one model can
+  /// each get a coherent two-step conversation — the shared queues are consumed in arrival
+  /// order and would hand one run's second script to another run's first request. nil from
+  /// the selector falls through to the queues.
+  var chunkScriptSelector: (@Sendable (ChatCompletionRequest) -> [ChatCompletionChunk]?)?
   var chatResponses: [ChatCompletionResponse] = []
   var messagesEventScripts: [[MessagesStreamEvent]] = []
   var responsesEventScripts: [[ResponsesStreamEvent]] = []
+  /// Errors a `/messages` request throws *instead of* consuming a script, in order — one per
+  /// request, consumed first. How a test stages a native refusal with a specific message.
+  var messagesStreamErrors: [Error] = []
   var manifestJSON = "[]"
+  /// Awaited before a chat stream yields its first chunk — a latch here holds a stream open
+  /// until something else happens (another stream starting), which is how concurrency
+  /// tests prove two runs overlap instead of relying on timing.
+  var streamGate: (@Sendable (ChatCompletionRequest) async -> Void)?
+  /// Errors a chat request throws *instead of* consuming a script, in order — one per request,
+  /// consumed first (the `messagesStreamErrors` shape for chat). How a test stages an HTTP-level
+  /// refusal (a 429, a 503, a lost connection) that arrives before any chunk.
+  var chatStreamErrors: [Error] = []
+  /// One entry per chat stream *opened* (consumed alongside its script, after the errors above):
+  /// a non-nil error makes that stream fail after yielding every chunk of its script — the
+  /// mid-stream failure, before or after output depending on the script's length. nil = the
+  /// stream finishes normally.
+  var chatStreamTrailingErrors: [Error?] = []
+  /// The `chatStreamTrailingErrors` shape for `/messages`: one entry per `/messages` stream
+  /// *opened* (consumed alongside its script), a non-nil error failing that stream after every
+  /// event of its script — an SSE error event relayed mid-stream, a connection lost inside the
+  /// stream — before or after output depending on the script's length. nil = a normal finish.
+  var messagesStreamTrailingErrors: [Error?] = []
   private var recordedRequests: [ChatCompletionRequest] = []
   private var recordedMessagesRequests: [MessagesRequest] = []
   private var recordedResponsesRequests: [ResponsesRequest] = []
@@ -124,35 +154,59 @@ final class MockOpenRouterService: OpenRouterService, @unchecked Sendable {
   }
 
   func chatCompletionStream(_ request: ChatCompletionRequest) async throws -> AsyncThrowingStream<ChatCompletionChunk, Error> {
-    let script: [ChatCompletionChunk]? = lock.withLock {
+    let staged: Result<([ChatCompletionChunk]?, Error?), Error> = lock.withLock {
       recordedRequests.append(request)
+      if !chatStreamErrors.isEmpty {
+        return .failure(chatStreamErrors.removeFirst())
+      }
+      let trailing: Error? = chatStreamTrailingErrors.isEmpty ? nil : chatStreamTrailingErrors.removeFirst()
+      if let chosen = chunkScriptSelector?(request) {
+        return .success((chosen, trailing))
+      }
       if let model = request.model, var scripts = chunkScriptsByModel[model], !scripts.isEmpty {
         let first = scripts.removeFirst()
         chunkScriptsByModel[model] = scripts
-        return first
+        return .success((first, trailing))
       }
-      return chunkScripts.isEmpty ? nil : chunkScripts.removeFirst()
+      return .success((chunkScripts.isEmpty ? nil : chunkScripts.removeFirst(), trailing))
     }
-    guard let script else { throw MockError.scriptExhausted }
+    let (chosen, trailing) = try staged.get()
+    guard let script = chosen else { throw MockError.scriptExhausted }
+    let gate = lock.withLock { streamGate }
     return AsyncThrowingStream { continuation in
-      for chunk in script {
-        continuation.yield(chunk)
+      guard let gate else {
+        for chunk in script {
+          continuation.yield(chunk)
+        }
+        continuation.finish(throwing: trailing)
+        return
       }
-      continuation.finish()
+      Task {
+        await gate(request)
+        for chunk in script {
+          continuation.yield(chunk)
+        }
+        continuation.finish(throwing: trailing)
+      }
     }
   }
 
   func messageStream(_ request: MessagesRequest) async throws -> AsyncThrowingStream<MessagesStreamEvent, Error> {
-    let script: [MessagesStreamEvent]? = lock.withLock {
+    let staged: Result<([MessagesStreamEvent]?, Error?), Error> = lock.withLock {
       recordedMessagesRequests.append(request)
-      return messagesEventScripts.isEmpty ? nil : messagesEventScripts.removeFirst()
+      if !messagesStreamErrors.isEmpty {
+        return .failure(messagesStreamErrors.removeFirst())
+      }
+      let trailing: Error? = messagesStreamTrailingErrors.isEmpty ? nil : messagesStreamTrailingErrors.removeFirst()
+      return .success((messagesEventScripts.isEmpty ? nil : messagesEventScripts.removeFirst(), trailing))
     }
-    guard let script else { throw MockError.scriptExhausted }
+    let (chosen, trailing) = try staged.get()
+    guard let script = chosen else { throw MockError.scriptExhausted }
     return AsyncThrowingStream { continuation in
       for event in script {
         continuation.yield(event)
       }
-      continuation.finish()
+      continuation.finish(throwing: trailing)
     }
   }
 
@@ -255,6 +309,58 @@ enum Fixtures {
 
   static func manifest(_ entries: String...) -> String {
     "[\(entries.joined(separator: ","))]"
+  }
+
+  /// A manifest entry for a thinking model: `tools` + `reasoning` in supported_parameters and,
+  /// when given, `top_provider.max_completion_tokens` (the `/messages` output ceiling).
+  static func reasoningManifestModel(id: String, contextLength: Int = 200000, maxCompletionTokens: Int? = nil) -> String {
+    let topProvider = maxCompletionTokens.map {
+      #","top_provider":{"context_length":\#(contextLength),"max_completion_tokens":\#($0)}"#
+    } ?? ""
+    return """
+    {"id":"\(id)","context_length":\(contextLength),"supported_parameters":["tools","reasoning"],"pricing":{"prompt":"0.000001","completion":"0.000002"}\(topProvider)}
+    """
+  }
+
+  /// A chat chunk whose delta carries `reasoning_details` fragments (raw JSON array text).
+  static func reasoningDetailsChunk(_ fragmentsJSON: String, model: String = "test/model") -> ChatCompletionChunk {
+    chunk("""
+      {"model":"\(model)","choices":[{"index":0,"delta":{"reasoning_details":\(fragmentsJSON)}}]}
+      """)
+  }
+
+  /// The final chunk of a chat stream with an explicit `finish_reason` (`length` = the reply hit
+  /// the output limit) and usage — `usageChunk` always says `stop`.
+  static func finishChunk(_ reason: String, cost: Double = 0.01, model: String = "test/model") -> ChatCompletionChunk {
+    chunk("""
+      {"model":"\(model)","choices":[{"index":0,"delta":{},"finish_reason":"\(reason)"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"cost":\(cost)}}
+      """)
+  }
+
+  /// A manifest entry for a model that takes images: `architecture.input_modalities` names
+  /// `image` (T5, what `ModelProfile.supportsVision` reads); `tools` in supported_parameters, and
+  /// `reasoning` too when asked (for the adaptive `think` omission).
+  static func visionManifestModel(id: String, contextLength: Int = 128000, supportsReasoning: Bool = false) -> String {
+    let parameters = supportsReasoning ? #""tools","reasoning""# : #""tools""#
+    return """
+    {"id":"\(id)","context_length":\(contextLength),"architecture":{"modality":"text+image->text","input_modalities":["text","image"],"output_modalities":["text"]},"supported_parameters":[\(parameters)],"pricing":{"prompt":"0.000001","completion":"0.000002"}}
+    """
+  }
+
+  /// The final chunk of a chat stream whose usage says how many prompt tokens were read from the
+  /// provider's prompt cache (`prompt_tokens_details.cached_tokens`, a subset of `prompt_tokens`
+  /// — the OpenAI accounting OpenRouter and LiteLLM normalize to). `usageChunk` carries no
+  /// details at all.
+  static func cachedUsageChunk(
+    cost: Double,
+    model: String = "test/model",
+    promptTokens: Int = 1000,
+    cachedTokens: Int = 700)
+    -> ChatCompletionChunk
+  {
+    chunk("""
+      {"model":"\(model)","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":\(promptTokens),"completion_tokens":5,"cost":\(cost),"prompt_tokens_details":{"cached_tokens":\(cachedTokens)}}}
+      """)
   }
 
   private static func encodeJSONString(_ text: String) -> String {

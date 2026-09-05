@@ -19,6 +19,9 @@ public struct PanelCandidate: Sendable {
   public let durationSeconds: Double
   /// Timeout or thrown error, when the candidate did not complete normally.
   public let error: String?
+  /// Whether the candidate's tools ran OS-confined. Recorded on the eval row it becomes,
+  /// since confinement changes what a candidate could do.
+  public var sandboxed = false
 
   /// A candidate the judge should consider: it ran to completion or at least left work.
   var judgeable: Bool { error == nil || !diff.isEmpty }
@@ -50,7 +53,8 @@ public enum PanelError: Error, Sendable {
   case needsTwoCandidates
   /// Every candidate errored before doing any work; there is nothing to judge.
   case allCandidatesFailed
-  /// The judge's reply did not contain a usable `WINNER: <n>` verdict.
+  /// The judge's reply named no attempt — neither as the structured `winner` nor as a
+  /// `WINNER: <n>` line in its prose (the associated text is the reply).
   case judgeFailed(String)
 }
 
@@ -72,19 +76,85 @@ public final class PanelRunner: @unchecked Sendable {
   private let evalStore: EvalStore
   private let maxSteps: Int
   private let timeoutSeconds: Int
+  private let catalog: ModelCatalog?
+  private let provider: ProviderTraits
+  /// Builds the OS sandbox for a candidate's snapshot directory, when the provider opted
+  /// in. Candidates run unattended under AutoApprove, so without this a candidate's bash
+  /// could reach `$HOME` or the network exactly as a `--yes` run's could. nil = no sandbox.
+  private let makeSandbox: (@Sendable (URL) -> ShellSandbox?)?
+  /// Environment policy for candidate bash — the provider token is withheld regardless.
+  private let subprocessEnvironment: SubprocessEnvironment
+  /// Lifecycle hooks each candidate's session runs — the per-call and compaction ones
+  /// (`forNestedRun`). The user's guardrails apply to unattended work too (a panel that
+  /// dropped them would be the way around every hook), but a candidate's finish is not the
+  /// user's turn end and its session is not the user's session, so `Stop`, the delegation
+  /// pair and the session-level events stay with the command that runs the panel. Hooks run
+  /// with the candidate's snapshot as `cwd`.
+  private let hooks: [HookDefinition]
+  /// Executes the `type: prompt` definitions in `hooks` (nil skips each with a notice — and a
+  /// `failClosed` one on a gate denies). The CLI passes its one shared runner.
+  private let hookPromptRunner: PromptHookRunner?
+  /// Whether each candidate's system prompt opens with the `# Environment` block for its own
+  /// snapshot (`EnvironmentContext`), as a CLI session's does. Off by default for embedders;
+  /// the CLI passes its policy.
+  private let environmentContext: Bool
+  private let toolResultGuard: ToolResultGuardPolicy
+  /// `Session.Configuration.adaptiveThink` for every candidate (`policies.adaptiveThink`, the
+  /// P1 A/B switch): a candidate on a model whose manifest advertises reasoning, under a
+  /// `reasoningEffort` dial, is not offered the `think` tool. Live in a panel since batch 14 —
+  /// the gate reads `reasoningEffort` below; a panel without a dial keeps the tool.
+  private let adaptiveThink: Bool
+  /// The reasoning dial every candidate's session runs with (`do --panel N --effort <level>`);
+  /// nil leaves requests exactly as they were. Applied by the session only to models whose
+  /// manifest says they support reasoning, like any other run's dial. The judge's structured
+  /// side request (`Verifier.judge`) never carries it — a judge is not a candidate.
+  private let reasoningEffort: Reasoning.Effort?
+  /// `Session.Configuration.agent` for every candidate — the Session-free way to mark a
+  /// candidate's `RunRecord` (`arnes runs --by-agent` groups by it, `--agent <name>` filters):
+  /// `arnes do --panel-on-fail` passes `panel-on-fail`, so its candidates are told apart from a
+  /// plain `--panel`'s, which passes nothing and records `agent == nil` as it always did.
+  private let candidateAgent: String?
+  /// `EvalOutcome.label` on every row this panel writes (`verifier-fail` for the trigger, read
+  /// back with `arnes evals show --suite panel --label <arm>`); nil writes an unlabelled row,
+  /// byte-identical to what a panel always wrote.
+  private let label: String?
 
   public init(
     service: OpenRouterService,
     recordStore: RunRecordStore = RunRecordStore(),
     evalStore: EvalStore = EvalStore(),
     maxSteps: Int = 30,
-    timeoutSeconds: Int = 600)
+    timeoutSeconds: Int = 600,
+    catalog: ModelCatalog? = nil,
+    provider: ProviderTraits = .openrouter,
+    makeSandbox: (@Sendable (URL) -> ShellSandbox?)? = nil,
+    subprocessEnvironment: SubprocessEnvironment = .default,
+    hooks: [HookDefinition] = [],
+    hookPromptRunner: PromptHookRunner? = nil,
+    environmentContext: Bool = false,
+    toolResultGuard: ToolResultGuardPolicy = .default,
+    adaptiveThink: Bool = false,
+    reasoningEffort: Reasoning.Effort? = nil,
+    candidateAgent: String? = nil,
+    label: String? = nil)
   {
     self.service = service
     self.recordStore = recordStore
     self.evalStore = evalStore
     self.maxSteps = maxSteps
     self.timeoutSeconds = timeoutSeconds
+    self.catalog = catalog
+    self.provider = provider
+    self.makeSandbox = makeSandbox
+    self.subprocessEnvironment = subprocessEnvironment
+    self.hooks = hooks.forNestedRun
+    self.hookPromptRunner = hookPromptRunner
+    self.environmentContext = environmentContext
+    self.toolResultGuard = toolResultGuard
+    self.adaptiveThink = adaptiveThink
+    self.reasoningEffort = reasoningEffort
+    self.candidateAgent = candidateAgent
+    self.label = label
   }
 
   public func run(
@@ -191,21 +261,48 @@ public final class PanelRunner: @unchecked Sendable {
   {
     let started = Date()
     let workdir = panelDir.appendingPathComponent("candidate-\(index)")
+    // The candidate's whole world is its snapshot: tools bind there, bash runs there, the
+    // sandbox (when on) confines writes to it.
+    let sandbox = makeSandbox?(workdir)
+    let sandboxed = sandbox != nil
     do {
       try Self.snapshot(of: base, to: workdir)
     } catch {
       return PanelCandidate(
         index: index, model: model, report: "", record: nil, diff: "",
         durationSeconds: Date().timeIntervalSince(started),
-        error: "snapshot: \(error)")
+        error: "snapshot: \(error)", sandboxed: sandboxed)
     }
 
+    let context = ToolContext(
+      root: workdir, sandbox: sandbox, environment: subprocessEnvironment)
+    var configuration = Session.Configuration(
+      model: model,
+      maxStepsPerTurn: maxSteps,
+      hooks: hooks,
+      reasoningEffort: reasoningEffort,
+      provider: provider,
+      subprocessEnvironment: subprocessEnvironment,
+      workingDirectory: workdir,
+      hookPromptRunner: hookPromptRunner,
+      toolResultGuard: toolResultGuard)
+    configuration.adaptiveThink = adaptiveThink
+    configuration.agent = candidateAgent
+    if environmentContext {
+      // The candidate's own block: its snapshot as the root (a copy of the user's tree, git
+      // state included), the candidate's sandbox.
+      configuration.extraSystemSections = [
+        await EnvironmentContext.block(
+          for: configuration, facts: EnvironmentContext.Facts(sandbox: sandbox)),
+      ]
+    }
     let agent = Agent(
       service: service,
-      tools: Session.tools(root: workdir),
+      tools: HarnessAssembly.coreTools(context),
       permissions: AutoApprovePermissions(),
       store: recordStore,
-      maxSteps: maxSteps)
+      catalog: catalog,
+      configuration: configuration)
     let prompt = "Work in the current directory.\n\n\(task)"
     let timeout = TimeInterval(timeoutSeconds)
 
@@ -235,24 +332,27 @@ public final class PanelRunner: @unchecked Sendable {
     case .success(let result):
       return PanelCandidate(
         index: index, model: model, report: result.text, record: result.record,
-        diff: diff, durationSeconds: Date().timeIntervalSince(started), error: nil)
+        diff: diff, durationSeconds: Date().timeIntervalSince(started), error: nil,
+        sandboxed: sandboxed)
     case .failure(let error):
       return PanelCandidate(
         index: index, model: model, report: "", record: nil,
-        diff: diff, durationSeconds: Date().timeIntervalSince(started), error: "\(error)")
+        diff: diff, durationSeconds: Date().timeIntervalSince(started), error: "\(error)",
+        sandboxed: sandboxed)
     case nil:
       return PanelCandidate(
         index: index, model: model, report: "", record: nil,
         diff: diff, durationSeconds: Date().timeIntervalSince(started),
-        error: "timeout after \(timeoutSeconds)s")
+        error: "timeout after \(timeoutSeconds)s", sandboxed: sandboxed)
     }
   }
 
   // MARK: Judge
 
-  private static let maxDiffCharsForJudge = 12_000
-  private static let maxReportCharsForJudge = 4_000
-
+  /// The judge is `Verifier.judge` (V1): one structured request over each judgeable attempt's
+  /// report and diff, the `WINNER: <n>` prose read kept as the last resort. Priced the way a
+  /// session prices its own steps — `usage.cost`, else the manifest estimate on a provider
+  /// that needs one — so a gateway that reports no cost no longer books the judge at $0.
   private func judge(
     task: String,
     candidates: [PanelCandidate],
@@ -269,59 +369,30 @@ public final class PanelRunner: @unchecked Sendable {
         judgeCostUSD: 0)
     }
 
-    var sections: [String] = ["Task:\n\(task)"]
-    for candidate in judgeable {
-      let report = candidate.report.isEmpty
-        ? "(no report — \(candidate.error ?? "empty"))"
-        : String(candidate.report.prefix(Self.maxReportCharsForJudge))
-      let changes = candidate.diff.isEmpty
-        ? "(no file changes)"
-        : String(candidate.diff.prefix(Self.maxDiffCharsForJudge))
-      sections.append("""
-        ## Attempt \(candidate.index + 1) (\(candidate.model))
-        Report:
-        \(report)
-        File changes:
-        \(changes)
-        """)
+    let profile = await Verifier.profile(for: judgeModel, in: catalog)
+    let attempts = judgeable.map { candidate in
+      Verifier.Candidate(
+        index: candidate.index,
+        model: candidate.model,
+        report: candidate.report.isEmpty ? "(no report — \(candidate.error ?? "empty"))" : candidate.report,
+        changes: candidate.diff)
     }
-
-    let response = try await service.chatCompletion(
-      ChatCompletionRequest(
-        model: judgeModel,
-        messages: [
-          .system("""
-            You judge several agents' attempts at the same task. Pick the attempt whose \
-            file changes best complete the task: working and complete beats partial, \
-            minimal beats sprawling, and a report is only as good as the changes backing \
-            it. Reply with exactly one line 'WINNER: <attempt number>' followed by a \
-            one-sentence reason.
-            """),
-          .user(sections.joined(separator: "\n\n")),
-        ]))
-    let text = response.choices.first?.message.content ?? ""
-    guard
-      let number = Self.parseWinner(text),
-      let winner = judgeable.first(where: { $0.index + 1 == number })
-    else {
-      throw PanelError.judgeFailed(text)
+    let verdict = try await Verifier.judge(
+      task: task,
+      candidates: attempts,
+      model: judgeModel,
+      service: service,
+      context: Verifier.Context(
+        catalog: catalog,
+        costOf: Verifier.pricing(profile: profile, estimatesCost: provider.estimatesCost)))
+    guard let winnerIndex = verdict.winnerIndex else {
+      throw PanelError.judgeFailed(verdict.text)
     }
     return PanelVerdict(
-      winnerIndex: winner.index,
-      reason: text.trimmingCharacters(in: .whitespacesAndNewlines),
+      winnerIndex: winnerIndex,
+      reason: verdict.text,
       judgeModel: judgeModel,
-      judgeCostUSD: response.usage?.cost ?? 0)
-  }
-
-  /// Extracts `<n>` from the first `WINNER: <n>` line in the judge's reply.
-  static func parseWinner(_ text: String) -> Int? {
-    for line in text.split(separator: "\n") {
-      let trimmed = line.trimmingCharacters(in: .whitespaces)
-      guard trimmed.uppercased().hasPrefix("WINNER") else { continue }
-      let digits = trimmed.drop { !$0.isNumber }.prefix { $0.isNumber }
-      return Int(digits)
-    }
-    return nil
+      judgeCostUSD: verdict.costUSD)
   }
 
   // MARK: Eval rows
@@ -341,97 +412,53 @@ public final class PanelRunner: @unchecked Sendable {
       startedAt: candidate.record?.startedAt ?? Date(),
       routedModels: candidate.record?.routedModels ?? [],
       error: candidate.error,
-      dialect: candidate.record?.dialect)
+      dialect: candidate.record?.dialect,
+      sandboxed: candidate.sandboxed,
+      label: label)
+  }
+
+  // MARK: Re-verification pricing
+
+  /// The pricing a Session-free caller hands `Verifier.Context.costOf` for a request on
+  /// `model`: `usage.cost` when the router reports it, else the manifest estimate on a provider
+  /// that needs one — the judge's own rule, so a re-verification on a gateway that reports no
+  /// cost is never booked at $0. What `arnes do --panel-on-fail` re-verifies the winner with.
+  public static func verifierPricing(
+    for model: String, catalog: ModelCatalog?, provider: ProviderTraits)
+    async -> @Sendable (Usage?) async -> Double?
+  {
+    let profile = await Verifier.profile(for: model, in: catalog)
+    return Verifier.pricing(profile: profile, estimatesCost: provider.estimatesCost)
   }
 
   // MARK: Directory plumbing
 
-  /// Copies the base directory into `destination`. Uses `cp` so APFS clones make the
-  /// copy near-instant on macOS; plain `cp -R` is the portable fallback.
+  // The snapshot/diff/sync plumbing lives in `WorkspaceSnapshot` (shared with the task
+  // tool's `isolation: worktree` agents and `arnes agents apply`); these forwarders keep the
+  // panel's call sites and tests as they were.
+
+  /// Copies the base directory into `destination` (`WorkspaceSnapshot.snapshot`).
   static func snapshot(of base: URL, to destination: URL) throws {
-    try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
-    let src = shellQuote(base.path)
-    let dst = shellQuote(destination.path)
-    let result = EvalRunner.bash(
-      "cp -Rc \(src)/. \(dst)/ 2>/dev/null || cp -R \(src)/. \(dst)/",
-      cwd: destination,
-      timeoutSeconds: 300)
-    guard result.exit == 0 else {
-      throw PanelPlumbingError.copyFailed(String(result.output.prefix(300)))
-    }
+    try WorkspaceSnapshot.snapshot(of: base, to: destination)
   }
 
-  /// Unified recursive diff of a candidate against the base, `.git` excluded, temp
-  /// paths rewritten so the judge reads `base/…` and `candidate/…`.
+  /// Unified recursive diff of a candidate against the base (`WorkspaceSnapshot.diff`).
   static func diff(base: URL, candidate: URL) -> String {
-    let result = EvalRunner.bash(
-      "diff -ruN -x .git \(shellQuote(base.path)) \(shellQuote(candidate.path))",
-      cwd: candidate,
-      timeoutSeconds: 60)
-    guard result.exit != 0 else { return "" }
-    return result.output
-      .replacingOccurrences(of: candidate.path, with: "candidate")
-      .replacingOccurrences(of: base.path, with: "base")
+    WorkspaceSnapshot.diff(base: base, candidate: candidate)
   }
 
-  /// Makes `destination` mirror `source` (contents compared file by file), leaving
-  /// `.git` in the destination untouched. This is how the winner lands in the real
-  /// working directory.
+  /// Makes `destination` mirror `source` (`WorkspaceSnapshot.sync`) — how the winner lands
+  /// in the real working directory.
   static func sync(from source: URL, into destination: URL) throws {
-    let sourceFiles = relativeFiles(under: source)
-    let destinationFiles = relativeFiles(under: destination)
-    let fileManager = FileManager.default
-
-    for relative in sourceFiles {
-      let from = source.appendingPathComponent(relative)
-      let to = destination.appendingPathComponent(relative)
-      if fileManager.fileExists(atPath: to.path) {
-        guard !fileManager.contentsEqual(atPath: from.path, andPath: to.path) else { continue }
-        try fileManager.removeItem(at: to)
-      } else {
-        try fileManager.createDirectory(
-          at: to.deletingLastPathComponent(),
-          withIntermediateDirectories: true)
-      }
-      try fileManager.copyItem(at: from, to: to)
-    }
-    for relative in destinationFiles.subtracting(sourceFiles) {
-      try? fileManager.removeItem(at: destination.appendingPathComponent(relative))
-    }
+    try WorkspaceSnapshot.sync(from: source, into: destination)
   }
 
-  /// Relative paths of every regular file under `root` (hidden files included), with
-  /// everything inside `.git` skipped.
+  /// Relative paths of every regular file under `root` (`WorkspaceSnapshot.relativeFiles`).
   static func relativeFiles(under root: URL) -> Set<String> {
-    guard let enumerator = FileManager.default.enumerator(
-      at: root,
-      includingPropertiesForKeys: [.isRegularFileKey])
-    else {
-      return []
-    }
-    let prefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
-    var files: Set<String> = []
-    for case let url as URL in enumerator {
-      let path = url.resolvingSymlinksInPath().path
-      guard path.hasPrefix(prefix) else { continue }
-      let relative = String(path.dropFirst(prefix.count))
-      if relative == ".git" || relative.hasPrefix(".git/") {
-        enumerator.skipDescendants()
-        continue
-      }
-      guard (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else {
-        continue
-      }
-      files.insert(relative)
-    }
-    return files
+    WorkspaceSnapshot.relativeFiles(under: root)
   }
 
   static func shellQuote(_ path: String) -> String {
-    "'\(path.replacingOccurrences(of: "'", with: "'\\''"))'"
+    WorkspaceSnapshot.shellQuote(path)
   }
-}
-
-enum PanelPlumbingError: Error, Sendable {
-  case copyFailed(String)
 }

@@ -1,0 +1,12 @@
+{
+  "id": "multi-edit-one-call",
+  "prompt": "In metrics.py the function compute_total is used in five places (its definition and four call sites). Rename it to compute_sum everywhere in that file — every definition and call, nothing else — using the file tools (read_file, then edit_file). Do not use bash and do not rewrite the file with write_file.",
+  "setup": "python3 - <<'PY'\nlines = []\nlines.append('\"\"\"Metrics helpers for the nightly report.\"\"\"')\nlines.append('')\nlines.append('')\nlines.append('def compute_total(values):')\nlines.append('    \"\"\"Sum the values, ignoring None.\"\"\"')\nlines.append('    return sum(v for v in values if v is not None)')\nlines.append('')\nlines.append('')\nlines.append('def daily(report):')\nlines.append('    return compute_total(report.get(\"daily\", []))')\nlines.append('')\nlines.append('')\nlines.append('def weekly(report):')\nlines.append('    days = [daily(d) for d in report.get(\"days\", [])]')\nlines.append('    return compute_total(days)')\nlines.append('')\nlines.append('')\nlines.append('def monthly(report):')\nlines.append('    weeks = [weekly(w) for w in report.get(\"weeks\", [])]')\nlines.append('    return compute_total(weeks)')\nlines.append('')\nlines.append('')\nlines.append('def describe(report):')\nlines.append('    total = compute_total(report.get(\"all\", []))')\nlines.append('    return f\"total={total}\"')\nlines.append('')\nlines.append('')\nlines.append('HEADER = \"metrics\"')\nlines.append('FOOTER = \"end of metrics\"')\nlines.append('')\nlines.append('')\nlines.append('def render(report):')\nlines.append('    return \"\\\\n\".join([HEADER, describe(report), FOOTER])')\nlines.append('')\nlines.append('')\nlines.append('if __name__ == \"__main__\":')\nlines.append('    print(render({\"all\": [1, 2, None, 3]}))')\nopen('metrics.py', 'w').write('\\n'.join(lines) + '\\n')\nPY",
+  "check": "test \"$(grep -c 'compute_sum' metrics.py)\" = 5 && ! grep -q 'compute_total' metrics.py && test \"$(python3 metrics.py | sed -n 2p)\" = 'total=6'",
+  "limits": {
+    "maxToolCalls": 4,
+    "forbiddenTools": ["bash", "write_file"],
+    "requiredTools": ["edit_file"],
+    "gate": false
+  }
+}

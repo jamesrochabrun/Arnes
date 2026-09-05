@@ -7,6 +7,8 @@ public enum EvalCaptureError: Error, Sendable {
   /// The writer model could not produce a valid task after retries; carries the
   /// last validation problem.
   case distillationFailed(String)
+  /// The reviewer declined to run the draft's setup/check scripts.
+  case declined
 }
 
 // MARK: - EvalCapture
@@ -81,14 +83,33 @@ public enum EvalCapture {
     return result
   }
 
+  /// Whether a task id is safe to use as a file name: one path component of letters,
+  /// digits, dashes, and underscores (the kebab-case the writer is asked for). The
+  /// writer model picks the id and the id becomes `<suite>/<id>.json`, so anything
+  /// else — `../`, a leading dot, a slash — would let a model choose where the file
+  /// lands.
+  public static func isSafeTaskId(_ id: String) -> Bool {
+    guard !id.isEmpty, id.count <= 100 else { return false }
+    return id.unicodeScalars.allSatisfy { scalar in
+      switch scalar {
+      case "a"..."z", "A"..."Z", "0"..."9", "-", "_": return true
+      default: return false
+      }
+    }
+  }
+
   /// Dry-runs the task's plumbing in a fresh temp directory. Returns nil when the
   /// task is a real test, or the reason it isn't:
+  /// - the id must be a safe file name (see `isSafeTaskId`),
   /// - the setup script must succeed, and
   /// - the check must FAIL before any agent work — a check that passes on the
   ///   freshly set-up directory tests nothing.
   public static func validate(_ task: EvalTask) -> String? {
     guard !task.id.isEmpty, !task.prompt.isEmpty, !task.check.isEmpty else {
       return "id, prompt, and check are all required"
+    }
+    guard isSafeTaskId(task.id) else {
+      return "id must be a short kebab-case name (letters, digits, dashes only) — got \"\(task.id.prefix(60))\""
     }
     let workdir = FileManager.default.temporaryDirectory
       .appendingPathComponent("arnes-capture-\(UUID().uuidString)")
@@ -118,6 +139,11 @@ public enum EvalCapture {
 /// Asks a writer model to distill a source (transcript or description) into an
 /// `EvalTask`, validates the draft with `EvalCapture.validate`, and retries once
 /// with the validation problem fed back.
+///
+/// Validation *runs* the draft's `setup` and `check` — bash a model just wrote, with the
+/// user's privileges. The `reviewer` sees every draft before that happens; the CLI shows
+/// the scripts and asks, headless callers pass `--yes`. No reviewer means run unasked
+/// (library callers that sandbox validation themselves).
 public final class EvalTaskDistiller: @unchecked Sendable {
   public struct Output: Sendable {
     public let task: EvalTask
@@ -125,10 +151,15 @@ public final class EvalTaskDistiller: @unchecked Sendable {
     public let attempts: Int
   }
 
-  private let service: OpenRouterService
+  /// Approves (true) or declines (false) running a draft's scripts.
+  public typealias Reviewer = @Sendable (EvalTask) async -> Bool
 
-  public init(service: OpenRouterService) {
+  private let service: OpenRouterService
+  private let reviewer: Reviewer?
+
+  public init(service: OpenRouterService, reviewer: Reviewer? = nil) {
     self.service = service
+    self.reviewer = reviewer
   }
 
   public func distill(
@@ -187,6 +218,9 @@ public final class EvalTaskDistiller: @unchecked Sendable {
       // timeout fails runs that did the work. Below the default's floor, drop it.
       if let timeout = task.timeoutSeconds, timeout < 120 {
         task.timeoutSeconds = nil
+      }
+      if let reviewer, await !reviewer(task) {
+        throw EvalCaptureError.declined
       }
       if let problem = EvalCapture.validate(task) {
         feedback = "The task failed validation: \(problem). Return the corrected JSON."

@@ -1,0 +1,14 @@
+{
+  "id": "fix-typo-efficiently",
+  "prompt": "greeting.txt has a typo: 'wrold' should be 'world'. Fix it in place using the file tools (read_file, then edit_file). Do not use bash.",
+  "setup": "printf 'hello wrold\\n' > greeting.txt",
+  "check": "test \"$(cat greeting.txt)\" = 'hello world'",
+  "limits": {
+    "maxSteps": 4,
+    "maxToolCalls": 3,
+    "forbiddenTools": ["bash", "write_file"],
+    "requiredTools": ["edit_file"],
+    "gate": true
+  },
+  "verify": true
+}

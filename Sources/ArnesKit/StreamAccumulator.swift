@@ -21,10 +21,24 @@ struct StreamAccumulator {
   private(set) var provider: String?
   private(set) var finishReason: String?
   private var toolCallsByIndex: [Int: ToolCall] = [:]
+  private var reasoningMerger = ReasoningDetails.FragmentMerger()
 
   /// Merged tool calls in index order.
   var toolCalls: [ToolCall] {
     toolCallsByIndex.sorted { $0.key < $1.key }.map(\.value)
+  }
+
+  /// The step's `reasoning_details` entries, fragments folded back into whole blocks in
+  /// index order (see `ReasoningDetails.FragmentMerger`); empty on a router that sends none.
+  var reasoningDetails: [JSONValue] {
+    reasoningMerger.entries
+  }
+
+  /// Prompt tokens the request read from the provider's prompt cache —
+  /// `usage.prompt_tokens_details.cached_tokens`, a subset of `prompt_tokens` (the OpenAI
+  /// accounting OpenRouter and LiteLLM both normalize to); nil when the usage carries none.
+  var cachedPromptTokens: Int? {
+    usage?.promptTokensDetails?.cachedTokens
   }
 
   mutating func ingest(_ chunk: ChatCompletionChunk) -> Deltas {
@@ -54,6 +68,9 @@ struct StreamAccumulator {
     if let reasoningDelta = delta.reasoning, !reasoningDelta.isEmpty {
       reasoning += reasoningDelta
       deltas.reasoning = reasoningDelta
+    }
+    for fragment in delta.reasoningDetails ?? [] {
+      reasoningMerger.ingest(fragment)
     }
     for fragment in delta.toolCalls ?? [] {
       merge(fragment)

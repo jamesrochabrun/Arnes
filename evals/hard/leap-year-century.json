@@ -1,0 +1,7 @@
+{
+  "id": "leap-year-century",
+  "prompt": "cal.py computes month lengths but is_leap(y) is wrong for century years. Fix is_leap to follow the Gregorian rule (a year is a leap year if divisible by 4, except centuries, which must be divisible by 400) so that days_in_month(y, m) is correct for any year and month 1..12. Keep both function names and signatures.",
+  "setup": "cat > cal.py <<'FEOF'\ndef is_leap(y):\n    return y % 4 == 0\n\n\ndef days_in_month(y, m):\n    lengths = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]\n    d = lengths[m - 1]\n    if m == 2 and is_leap(y):\n        d += 1\n    return d\nFEOF",
+  "check": "python3 - <<'PYEOF'\nimport calendar\nfrom cal import days_in_month, is_leap\nfor y in [1600, 1700, 1900, 1999, 2000, 2001, 2004, 2024, 2100, 2400]:\n    for m in range(1, 13):\n        got, want = days_in_month(y, m), calendar.monthrange(y, m)[1]\n        assert got == want, (y, m, got, want)\nassert is_leap(2000) and is_leap(2024) and is_leap(1600)\nassert not is_leap(1900) and not is_leap(2100) and not is_leap(2001)\nprint(\"ok\")\nPYEOF",
+  "timeoutSeconds": 300
+}

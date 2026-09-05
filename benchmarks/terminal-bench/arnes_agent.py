@@ -10,6 +10,7 @@ prebuilt Linux binary when ARNES_LINUX_BINARY_URL is set (much faster). Pick the
 model with ARNES_MODEL (default: openrouter/auto).
 """
 
+import json
 import os
 import shlex
 
@@ -18,6 +19,13 @@ from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
 ARNES_REPO = "https://github.com/jamesrochabrun/Arnes"
+
+# Where the run's result envelope and final message land inside the container. Harbor mounts
+# the agent's log directory at this path, so the host-side `populate_context_post_run` can
+# read them back from `self.logs_dir`.
+CONTAINER_LOGS_DIR = "/logs/agent"
+RESULT_FILE = "arnes-result.json"
+LAST_MESSAGE_FILE = "arnes-last-message.md"
 
 
 class ArnesAgent(BaseInstalledAgent):
@@ -74,13 +82,59 @@ class ArnesAgent(BaseInstalledAgent):
         context: AgentContext,
     ) -> None:
         model = os.environ.get("ARNES_MODEL", "openrouter/auto")
+        result_path = f"{CONTAINER_LOGS_DIR}/{RESULT_FILE}"
+        last_message_path = f"{CONTAINER_LOGS_DIR}/{LAST_MESSAGE_FILE}"
         # OPENROUTER_API_KEY is merged into the environment by the harness config.
         await self.exec_as_agent(
             environment,
-            f"arnes do {shlex.quote(instruction)} -m {shlex.quote(model)}",
+            # --yes: the task container is disposable and nobody answers permission prompts.
+            # --add-dir /: --yes approves ordinary work inside the working directory only;
+            # Terminal-Bench tasks legitimately write all over a throwaway container, so the
+            # widening is stated explicitly instead of riding along with --yes.
+            # --output-format json: stdout is one result envelope (cost, steps, stop_reason),
+            # saved for populate_context_post_run; --output-last-message keeps the final
+            # report readable on its own. </dev/null: arnes reads a non-terminal stdin as
+            # context, and a harness may hold the pipe open. The exit code is deliberately
+            # not propagated (a max_steps stop is exit 3): Terminal-Bench scores each task
+            # with its own tests, and the envelope says how the run ended.
+            f"mkdir -p {shlex.quote(CONTAINER_LOGS_DIR)}; "
+            f"arnes do {shlex.quote(instruction)} -m {shlex.quote(model)} --yes --add-dir / "
+            f"--output-format json --output-last-message {shlex.quote(last_message_path)} "
+            f"</dev/null >{shlex.quote(result_path)}; true",
         )
 
     def populate_context_post_run(self, context: AgentContext) -> None:
-        # Cost/steps land in ~/.arnes/runs.jsonl inside the container; Terminal-Bench
-        # scores via each task's own test suite, so nothing further is required here.
-        pass
+        # The result envelope written inside the container (see `run`) is read back from the
+        # mounted logs directory. Terminal-Bench scores via each task's own test suite, so
+        # everything here is bookkeeping — best effort, never a failure.
+        try:
+            path = os.path.join(str(self.logs_dir), RESULT_FILE)
+            with open(path, encoding="utf-8") as handle:
+                envelope = json.loads(handle.read().strip().splitlines()[-1])
+        except (OSError, ValueError, IndexError, AttributeError):
+            return
+        try:
+            cost = envelope.get("cost_usd")
+            if cost is not None:
+                context.cost_usd = float(cost)
+            prompt_tokens = envelope.get("prompt_tokens")
+            if prompt_tokens is not None:
+                context.n_input_tokens = int(prompt_tokens)
+            completion_tokens = envelope.get("completion_tokens")
+            if completion_tokens is not None:
+                context.n_output_tokens = int(completion_tokens)
+            metadata = getattr(context, "metadata", None)
+            if isinstance(metadata, dict):
+                metadata.update(
+                    {
+                        "arnes_stop_reason": envelope.get("stop_reason"),
+                        "arnes_steps": envelope.get("steps"),
+                        "arnes_tool_calls": envelope.get("tool_calls"),
+                        "arnes_denied_calls": envelope.get("denied_calls"),
+                        "arnes_routed_models": envelope.get("routed_models"),
+                        "arnes_cost_estimated": envelope.get("cost_estimated"),
+                    }
+                )
+        except (AttributeError, TypeError, ValueError):
+            # An AgentContext without these fields: the envelope is still on disk.
+            return

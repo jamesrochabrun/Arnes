@@ -1,0 +1,20 @@
+{
+  "id": "add-docstring-rubric",
+  "prompt": "Add a docstring to the function area in shapes.py that states what it computes and what unit the result is in. Do not change the function's behavior.",
+  "setup": "printf 'def area(width, height):\\n    return width * height\\n\\nif __name__ == \"__main__\":\\n    print(area(3, 4))\\n' > shapes.py",
+  "check": "test \"$(python3 shapes.py)\" = 12 && python3 -c 'import shapes; assert shapes.area.__doc__, \"no docstring\"'",
+  "rubric": {
+    "criteria": [
+      "The docstring says the function computes the area of a rectangle (or of a width × height shape).",
+      "The docstring names the unit of the result (square units of the inputs).",
+      "The diff changes nothing but the docstring — no other line of shapes.py is edited and no other file is added."
+    ],
+    "threshold": 0.7,
+    "gate": true
+  },
+  "limits": {
+    "maxSteps": 6,
+    "requiredTools": ["edit_file"],
+    "gate": false
+  }
+}

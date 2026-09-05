@@ -1,0 +1,6 @@
+{
+  "id": "trivial-task-stays-direct",
+  "prompt": "Create hello.txt containing exactly: hello world",
+  "setup": "{ cat \"$HOME/.arnes/runs.jsonl\" 2>/dev/null || true; } | wc -l | tr -d ' ' > .runs-before",
+  "check": "test \"$(cat hello.txt)\" = 'hello world' && if [ -n \"$ARNES_SESSION_ID\" ]; then ! grep -q \"\\\"parentSessionId\\\":\\\"$ARNES_SESSION_ID\\\"\" \"$HOME/.arnes/runs.jsonl\" 2>/dev/null; else ! { tail -n \"+$(( $(cat .runs-before) + 1 ))\" \"$HOME/.arnes/runs.jsonl\" 2>/dev/null | grep -q '\"agent\":\"'; }; fi"
+}

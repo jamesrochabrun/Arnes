@@ -1,3 +1,4 @@
+import ArnesKit
 import Foundation
 #if canImport(Glibc)
 import Glibc
@@ -12,10 +13,22 @@ final class LineReader {
   /// Ctrl-O at the prompt (verbosity toggle). The handler prints its own notice
   /// line; the reader redraws the prompt underneath it.
   var onCtrlO: (() -> Void)?
+  /// Ctrl-T at the prompt (the reasoning-display toggle), the same way.
+  var onCtrlT: (() -> Void)?
 
   /// When set (and active), editing state is drawn in the screen's pinned bottom box
   /// instead of inline, and notices go through the screen so the box stays below them.
   var screen: Screen?
+
+  /// Where a collapsed paste's full text is kept (`[Pasted text #1 +58 lines]` in the box,
+  /// the 58 lines here). nil inserts every paste literally, newlines as spaces.
+  var pastes: PasteStore?
+
+  /// Slash-command autocomplete candidates (built-ins + skills + MCP prompts). While the
+  /// buffer is a lone `/token`, matches show in a popup under the box: ↑/↓ move the
+  /// highlight, Tab inserts the highlighted command (ready for arguments), Enter runs it,
+  /// Esc dismisses until the text changes. nil (or no Screen) leaves every key as it was.
+  var completions: (() -> [SlashCompletion.Item])?
 
   /// A DSR cursor-position report arrived while this reader owned stdin (the screen
   /// requests one after a resize) — forwards the 1-based row.
@@ -65,9 +78,14 @@ final class LineReader {
     var original = termios()
     tcgetattr(STDIN_FILENO, &original)
     var raw = original
-    raw.c_lflag &= ~tcflag_t(ICANON | ECHO | ISIG)
+    // IEXTEN too, or the tty driver eats Ctrl-O (VDISCARD on macOS) before it can toggle.
+    raw.c_lflag &= ~tcflag_t(ICANON | ECHO | ISIG | IEXTEN)
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw)
+    // Bracketed paste: the terminal wraps pasted text in ESC[200~ … ESC[201~ so a paste is
+    // one event instead of keystrokes — its newlines must not submit the line.
+    write("\u{1B}[?2004h")
     defer {
+      write("\u{1B}[?2004l")
       var restore = original
       tcsetattr(STDIN_FILENO, TCSAFLUSH, &restore)
     }
@@ -78,8 +96,36 @@ final class LineReader {
     var pendingLine: [Character] = []
     var interruptArmed = false
 
+    // Autocomplete popup state. Items are computed once per read; matches follow the
+    // buffer, the highlight follows the *item* (narrowing keeps it where it was).
+    let completionItems = usesScreen ? completions?() : nil
+    var menuItems: [SlashCompletion.Item] = []
+    var menuSelected = 0
+    var menuSuppressed = false
+    var menuSnapshot = String(buffer)
+
+    func refreshMenu() {
+      guard let completionItems, let screen else { return }
+      let text = String(buffer)
+      if text != menuSnapshot { // an edit lifts an Esc dismissal
+        menuSuppressed = false
+        menuSnapshot = text
+      }
+      let matches = menuSuppressed ? [] : SlashCompletion.matches(for: text, in: completionItems)
+      if menuItems.indices.contains(menuSelected),
+         let kept = matches.firstIndex(of: menuItems[menuSelected])
+      {
+        menuSelected = kept
+      } else if menuSelected >= matches.count {
+        menuSelected = 0
+      }
+      menuItems = matches
+      screen.setCompletions(SlashCompletion.lines(matches: matches, selected: menuSelected))
+    }
+
     func redraw() {
       if usesScreen, let screen {
+        refreshMenu()
         screen.setInput(prompt: prompt, buffer: String(buffer), cursor: cursor)
         return
       }
@@ -93,6 +139,7 @@ final class LineReader {
 
     func endInput() {
       if usesScreen, let screen {
+        screen.setCompletions([])
         screen.setInput(prompt: prompt, buffer: "", cursor: 0)
       } else {
         write("\n")
@@ -112,9 +159,21 @@ final class LineReader {
       }
 
       switch byte {
-      case 0x0A, 0x0D: // enter
+      case 0x0A, 0x0D: // enter — with the popup open, runs the highlighted command
+        if menuItems.indices.contains(menuSelected) {
+          let choice = menuItems[menuSelected]
+          endInput()
+          return choice.name
+        }
         endInput()
         return String(buffer)
+
+      case 0x09: // tab — insert the highlighted completion, ready for arguments
+        if menuItems.indices.contains(menuSelected) {
+          buffer = Array(SlashCompletion.accepted(menuItems[menuSelected]))
+          cursor = buffer.count
+          redraw()
+        }
 
       case 0x03: // Ctrl-C
         if buffer.isEmpty {
@@ -152,6 +211,10 @@ final class LineReader {
         onCtrlO?()
         redraw()
 
+      case 0x14: // Ctrl-T — show/hide streamed reasoning
+        onCtrlT?()
+        redraw()
+
       case 0x15: // Ctrl-U — clear line
         buffer.removeAll()
         cursor = 0
@@ -169,9 +232,14 @@ final class LineReader {
         // A sequence's remaining bytes arrive in the same burst; a lone Esc press is
         // followed by silence. Blocking here would swallow the *next* keystroke.
         guard byteAvailable(withinMs: 25) else {
-          buffer.removeAll() // bare Esc — clear the line
-          cursor = 0
-          redraw()
+          if !menuItems.isEmpty {
+            menuSuppressed = true // bare Esc with the popup open — dismiss it, keep the text
+            redraw()
+          } else {
+            buffer.removeAll() // bare Esc — clear the line
+            cursor = 0
+            redraw()
+          }
           continue
         }
         guard let opener = readByte() else { continue }
@@ -195,19 +263,31 @@ final class LineReader {
           continue
         }
         switch final {
-        case UInt8(ascii: "A"): // up — history back
-          if historyIndex > 0 {
+        case UInt8(ascii: "A"): // up — menu highlight when the popup is open, else history back
+          if !menuItems.isEmpty {
+            menuSelected = (menuSelected + menuItems.count - 1) % menuItems.count
+            redraw()
+          } else if historyIndex > 0 {
             if historyIndex == history.count { pendingLine = buffer }
             historyIndex -= 1
             buffer = Array(history[historyIndex])
             cursor = buffer.count
+            // A recalled slash command must not open the popup — the next ↑ is more
+            // history, not menu navigation. The next real edit lifts this.
+            menuSuppressed = true
+            menuSnapshot = String(buffer)
             redraw()
           }
-        case UInt8(ascii: "B"): // down — history forward
-          if historyIndex < history.count {
+        case UInt8(ascii: "B"): // down — menu highlight, else history forward
+          if !menuItems.isEmpty {
+            menuSelected = (menuSelected + 1) % menuItems.count
+            redraw()
+          } else if historyIndex < history.count {
             historyIndex += 1
             buffer = historyIndex == history.count ? pendingLine : Array(history[historyIndex])
             cursor = buffer.count
+            menuSuppressed = true
+            menuSnapshot = String(buffer)
             redraw()
           }
         case UInt8(ascii: "C"): // right
@@ -225,6 +305,36 @@ final class LineReader {
             buffer.remove(at: cursor)
             redraw()
           }
+        case UInt8(ascii: "~") where params == PasteCapture.startParams: // bracketed paste
+          // The content arrives as one burst up to ESC[201~. Multi-line (or oversized)
+          // pastes collapse to a placeholder so they don't submit a message per line;
+          // small single-line ones insert literally.
+          guard let pasted = readPastedText() else { continue }
+          let text = PasteStore.normalize(pasted)
+          guard !text.isEmpty else { continue }
+          let inserted: String
+          if let pastes, let image = PasteStore.imagePath(from: text) {
+            // A dragged image arrives as its path — collapsed so the leading `/` can't
+            // read as a slash command; expanded back to the clean path at submit. A
+            // screenshot-thumbnail drag is copied out right now, before its OS grant dies.
+            let stored = pastes.storeImage(image)
+            inserted = stored.placeholder
+            if let note = stored.note {
+              let line = ANSI.yellow(TerminalText.sanitize(note))
+              if usesScreen, let screen {
+                screen.print(line)
+              } else {
+                write("\r\u{1B}[K" + line + "\n")
+              }
+            }
+          } else if let pastes, PasteStore.shouldCollapse(text) {
+            inserted = pastes.store(text)
+          } else {
+            inserted = PasteStore.inlineText(text)
+          }
+          buffer.insert(contentsOf: Array(inserted), at: cursor)
+          cursor += inserted.count
+          redraw()
         case UInt8(ascii: "R"): // cursor-position report (row;col) — for the screen
           if let row = Self.reportRow(params) {
             onCursorReport?(row)
@@ -268,6 +378,16 @@ final class LineReader {
     return count == 1 ? byte : nil
   }
 
+  /// Everything between the paste markers, blocking until `ESC[201~` (the content arrives
+  /// in the same burst as the start marker). nil when stdin closes mid-paste.
+  private func readPastedText() -> String? {
+    var capture = PasteCapture()
+    while let byte = readByte() {
+      if case .finished(let text) = capture.feed(byte) { return text }
+    }
+    return nil
+  }
+
   /// Whether another byte is already behind the one just read — distinguishes an
   /// escape sequence's ESC (followed immediately by "[" etc.) from a lone Esc press.
   private func byteAvailable(withinMs timeout: Int32) -> Bool {
@@ -281,9 +401,7 @@ final class LineReader {
 
   private func saveHistory() {
     guard let historyURL else { return }
-    try? FileManager.default.createDirectory(
-      at: historyURL.deletingLastPathComponent(),
-      withIntermediateDirectories: true)
-    try? history.joined(separator: "\n").write(to: historyURL, atomically: true, encoding: .utf8)
+    // Prompts are private too — owner-only like everything else under ~/.arnes.
+    try? SecureFiles.writePrivate(Data(history.joined(separator: "\n").utf8), to: historyURL)
   }
 }

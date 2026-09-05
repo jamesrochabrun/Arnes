@@ -11,7 +11,13 @@ let package = Package(
     .executable(name: "arnes", targets: ["arnes"]),
   ],
   dependencies: [
-    .package(url: "https://github.com/jamesrochabrun/OpenRouterSwift", from: "0.1.0"),
+    // 0.2.0 carries `Message.reasoningDetails` (the slot a tool loop replays signed/encrypted
+    // reasoning through), the `reasoning_effort` wire pin and sorted-keys request encoding —
+    // three changes made upstream in OpenRouterSwift. Nothing older builds this tree.
+    .package(url: "https://github.com/jamesrochabrun/OpenRouterSwift", from: "0.2.0"),
+    // OpenRouterSwift's injectable HTTP client is a SwiftOpenAI protocol; the gateway
+    // transport (URL rewriting for LiteLLM-style providers) implements it.
+    .package(url: "https://github.com/jamesrochabrun/SwiftOpenAI", from: "4.6.0"),
     .package(url: "https://github.com/apple/swift-argument-parser", from: "1.3.0"),
     .package(url: "https://github.com/JohnSundell/Splash", from: "0.16.0"),
   ],
@@ -20,6 +26,7 @@ let package = Package(
       name: "ArnesKit",
       dependencies: [
         .product(name: "OpenRouterSwift", package: "OpenRouterSwift"),
+        .product(name: "SwiftOpenAI", package: "SwiftOpenAI"),
       ],
       swiftSettings: [
         .enableExperimentalFeature("StrictConcurrency"),
@@ -33,7 +40,10 @@ let package = Package(
       ]),
     .testTarget(
       name: "ArnesKitTests",
-      dependencies: ["ArnesKit"]),
+      dependencies: [
+        "ArnesKit",
+        .product(name: "SwiftOpenAI", package: "SwiftOpenAI"), // HTTPClient stubs for the gateway tests
+      ]),
     .testTarget(
       name: "ArnesCLITests",
       dependencies: ["arnes"]),

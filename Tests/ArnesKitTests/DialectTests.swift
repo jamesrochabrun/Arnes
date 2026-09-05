@@ -19,15 +19,6 @@ final class NativeDialectTests: XCTestCase {
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     return url
   }
-
-  private func drain(_ stream: AsyncThrowingStream<AgentEvent, Error>) async throws -> [AgentEvent] {
-    var events: [AgentEvent] = []
-    for try await event in stream {
-      events.append(event)
-    }
-    return events
-  }
-
   // MARK: Translators
 
   func testMessagesTranslatorShapesToolUseAndMergesToolResults() throws {
@@ -172,7 +163,7 @@ final class NativeDialectTests: XCTestCase {
       dialectStore: tempDialectStore(),
       configuration: .init(model: "anthropic/claude-test"))
 
-    _ = try await drain(await session.send("write out.txt"))
+    _ = try await Events.drain(await session.send("write out.txt"))
 
     // The real tool executed from the natively streamed call.
     XCTAssertEqual(
@@ -192,6 +183,14 @@ final class NativeDialectTests: XCTestCase {
     let toolUse = second[1]["content"]?.arrayValue?.first
     XCTAssertEqual(toolUse?["type"]?.stringValue, "tool_use")
     XCTAssertEqual(toolUse?["input"]?["path"]?.stringValue, "out.txt")
+    // No effort: no `thinking`, no thinking block, the plain max_tokens — byte-identical to
+    // before the reasoning round-trip existed (R1).
+    XCTAssertEqual(second[1]["content"]?.arrayValue?.count, 1)
+    for request in mock.messagesRequests {
+      let encoded = Fixtures.jsonValue(request)
+      XCTAssertNil(encoded["thinking"])
+      XCTAssertEqual(encoded["max_tokens"]?.intValue, 8192)
+    }
     let toolResult = second[2]["content"]?.arrayValue?.first
     XCTAssertEqual(toolResult?["type"]?.stringValue, "tool_result")
     XCTAssertEqual(toolResult?["tool_use_id"]?.stringValue, "tu_1")
@@ -226,7 +225,7 @@ final class NativeDialectTests: XCTestCase {
       dialectStore: tempDialectStore(),
       configuration: .init(model: "openai/gpt-test"))
 
-    _ = try await drain(await session.send("write out.txt"))
+    _ = try await Events.drain(await session.send("write out.txt"))
 
     XCTAssertEqual(
       try String(contentsOf: root.appendingPathComponent("out.txt"), encoding: .utf8),
@@ -241,11 +240,14 @@ final class NativeDialectTests: XCTestCase {
     XCTAssertEqual(mock.responsesRequests.count, 2)
     let items = Fixtures.jsonValue(mock.responsesRequests[1].input).arrayValue ?? []
     XCTAssertEqual(items.count, 3)
+    // No effort: no `include`, no reasoning item — the pre-R1 request.
+    XCTAssertNil(mock.responsesRequests[0].include)
+    XCTAssertNil(mock.responsesRequests[1].include)
     XCTAssertEqual(items[1]["type"]?.stringValue, "function_call")
     XCTAssertEqual(items[1]["call_id"]?.stringValue, "call_1")
     XCTAssertEqual(items[2]["type"]?.stringValue, "function_call_output")
     XCTAssertEqual(items[2]["call_id"]?.stringValue, "call_1")
-    XCTAssertEqual(items[2]["output"]?.stringValue.map { $0.contains("wrote") }, true)
+    XCTAssertEqual(items[2]["output"]?.stringValue.map { $0.contains("created") }, true)
   }
 
   func testForcedChatDialectOverridesNativeFamily() async throws {
@@ -261,7 +263,7 @@ final class NativeDialectTests: XCTestCase {
       dialectStore: tempDialectStore(),
       configuration: .init(model: "anthropic/claude-test", dialect: .chat))
 
-    _ = try await drain(await session.send("say hi"))
+    _ = try await Events.drain(await session.send("say hi"))
 
     XCTAssertEqual(mock.requests.count, 1)
     XCTAssertTrue(mock.messagesRequests.isEmpty)

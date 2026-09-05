@@ -77,9 +77,45 @@ final class SkillsTests: XCTestCase {
       frontmatter: nil, body: "global body")
 
     let skills = SkillLibrary.discover(workdir: workdir, home: home)
-    XCTAssertEqual(skills.map(\.name), ["release", "review", "global-only"])
+    XCTAssertEqual(skills.map(\.name), ["release", "review", "global-only", "init"])
     XCTAssertEqual(skills.first?.description, "project")
     XCTAssertEqual(skills.first?.body, "project version")
+  }
+
+  func testBuiltinInitSkillPresentAndShadowable() throws {
+    let workdir = try tempDirectory()
+    let home = try tempDirectory()
+
+    // With nothing installed anywhere, /init still exists.
+    let bare = SkillLibrary.discover(workdir: workdir, home: home)
+    XCTAssertEqual(bare.map(\.name), ["init"])
+    let builtin = try XCTUnwrap(bare.first)
+    XCTAssertNil(builtin.directory, "a built-in has no directory on disk")
+    XCTAssertEqual(builtin.sourceDescription, "built-in")
+    XCTAssertTrue(builtin.body.contains("AGENTS.md"))
+    XCTAssertFalse(builtin.invocationPrompt(arguments: nil).contains("Supporting files"),
+                   "no directory means no supporting-files pointer")
+    XCTAssertTrue(builtin.invocationPrompt(arguments: nil).contains("AGENTS.md"))
+
+    // Built-ins come last, after everything discovered on disk.
+    try writeSkill(
+      in: home.appendingPathComponent(".arnes/skills"), directory: "release",
+      frontmatter: "name: release\ndescription: d", body: "release body")
+    XCTAssertEqual(
+      SkillLibrary.discover(workdir: workdir, home: home).map(\.name), ["release", "init"])
+
+    // A SKILL.md named `init` shadows the built-in entirely.
+    try writeSkill(
+      in: workdir.appendingPathComponent(".claude/skills"), directory: "init",
+      frontmatter: "name: init\ndescription: mine", body: "my own init")
+    let shadowed = SkillLibrary.discover(workdir: workdir, home: home)
+    XCTAssertEqual(shadowed.map(\.name), ["init", "release"])
+    XCTAssertEqual(shadowed.first?.body, "my own init")
+    XCTAssertNotNil(shadowed.first?.directory)
+
+    // The trust listing only ever names real files, never a built-in.
+    XCTAssertEqual(SkillLibrary.projectSkills(workdir: workdir).map(\.name), ["init"])
+    XCTAssertTrue(SkillLibrary.projectSkills(workdir: try tempDirectory()).isEmpty)
   }
 
   // MARK: Tool
@@ -94,7 +130,7 @@ final class SkillsTests: XCTestCase {
     let tool = SkillTool(skills: [skill])
     let result = try await tool.execute(arguments: ["name": .string("release")])
     XCTAssertTrue(result.contains("Run the tag script."))
-    XCTAssertTrue(result.contains(skill.directory.path))
+    XCTAssertTrue(result.contains(skill.sourceDescription))
     XCTAssertEqual(tool.permission, .readOnly)
   }
 
@@ -168,5 +204,65 @@ final class SkillsTests: XCTestCase {
     let system = try XCTUnwrap(mock.requests.first?.messages.first { $0.role == .system })
     XCTAssertTrue(system.content?.plainText.contains("# Skills") == true)
     XCTAssertTrue(system.content?.plainText.contains("- release: cut releases") == true)
+  }
+
+  // MARK: Listing cap
+
+  private func skill(_ name: String, description: String) -> Skill {
+    Skill(name: name, description: description, body: "b", directory: URL(fileURLWithPath: "/tmp"))
+  }
+
+  func testSmallLibraryListsEveryDescriptionExactlyAsBefore() {
+    let tool = SkillTool(skills: [skill("release", description: "cut releases"), skill("review", description: "")])
+    XCTAssertEqual(
+      tool.promptSection,
+      """
+      # Skills
+
+      Skills are instructions for specific kinds of tasks. Before starting a task that \
+      matches one, call the skill tool with its name and follow the instructions it returns.
+
+      - release: cut releases
+      - review
+      """)
+  }
+
+  func testLongDescriptionsAreClippedInTheListingOnly() async throws {
+    let long = String(repeating: "x", count: 500)
+    let tool = SkillTool(skills: [skill("big", description: long)])
+    let section = tool.promptSection
+    XCTAssertTrue(section.contains("- big: " + String(repeating: "x", count: SkillTool.descriptionClipChars) + "…"))
+    XCTAssertFalse(section.contains(long))
+    // The `skill` result is the body, untouched by the listing clip.
+    let loaded = try await tool.execute(arguments: ["name": .string("big")])
+    XCTAssertTrue(loaded.contains("Skill 'big' loaded"))
+  }
+
+  func testOverTheCapTheRestAreListedByNameOnlyInDiscoveryOrder() {
+    // Forty skills with 150-char descriptions is ~6.5 KB of entries: the default cap keeps the
+    // first ~35 described and names the rest, so the model can still call every one of them.
+    let skills = (0..<40).map { skill("skill-\($0)", description: String(repeating: "d", count: 150)) }
+    let section = SkillTool(skills: skills).promptSection
+    let (described, namesOnly) = SkillTool.split(skills, maxBytes: SkillTool.defaultListingMaxBytes)
+    XCTAssertFalse(namesOnly.isEmpty)
+    XCTAssertEqual(described.map(\.name) + namesOnly.map(\.name), skills.map(\.name), "order is discovery order")
+    XCTAssertLessThanOrEqual(described.map(SkillTool.entry).joined(separator: "\n").utf8.count, SkillTool.defaultListingMaxBytes)
+    for s in skills { XCTAssertTrue(section.contains(s.name), s.name) }
+    XCTAssertTrue(section.contains("Also available (descriptions omitted to save space"))
+    XCTAssertTrue(section.contains("arnes skills"))
+    XCTAssertFalse(section.contains("- \(namesOnly[0].name): "), "a names-only skill has no description line")
+    // The first skill that doesn't fit stops the described list even if a later one would.
+    let mixed = [skill("a", description: String(repeating: "a", count: 100)),
+                 skill("b", description: String(repeating: "b", count: 100)),
+                 skill("c", description: "")]
+    let split = SkillTool.split(mixed, maxBytes: 110)
+    XCTAssertEqual(split.described.map(\.name), ["a"])
+    XCTAssertEqual(split.namesOnly.map(\.name), ["b", "c"])
+  }
+
+  func testZeroCapListsNamesOnly() {
+    let section = SkillTool(skills: [skill("release", description: "cut releases")], listingMaxBytes: 0).promptSection
+    XCTAssertFalse(section.contains("cut releases"))
+    XCTAssertTrue(section.contains("Also available (descriptions omitted to save space; call the skill tool with the exact name, or run `arnes skills`): release"))
   }
 }

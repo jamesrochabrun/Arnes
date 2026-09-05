@@ -21,7 +21,7 @@ final class Screen: @unchecked Sendable {
 
   private let lock = NSLock()
   private var partial = ""      // unterminated streamed line, redrawn in the bar region
-  private var status: String?   // spinner / permission-question line above the box
+  private var statusLines: [String] = [] // spinner / permission-panel lines above the box
   private var showBox = false
   private var prompt = "› "
   private var buffer = ""
@@ -30,6 +30,9 @@ final class Screen: @unchecked Sendable {
   private var placeholder = Screen.idlePlaceholder
   private var infoLeft = ""     // usage / activity, above the box's left edge
   private var infoRight = ""    // active model, right-aligned above the box
+  private var modeLabel = ""    // permission mode, embedded bottom-left in the box border
+  private var modeHighlighted = false // styled loud when the mode isn't `default`
+  private var completions: [String] = [] // autocomplete popup rows, drawn under the box
   /// Visible width of each region line as last drawn — erasing recomputes how many
   /// physical rows each occupies at the *current* width, so a resize that rewrapped
   /// them (terminal reflow) is healed instead of corrupting the cursor math.
@@ -47,7 +50,7 @@ final class Screen: @unchecked Sendable {
   /// unknown, which disables bottom-pinning and leaves the bar under the content.
   private var transcriptRow = 0
 
-  static let idlePlaceholder = "message · /help for commands"
+  static let idlePlaceholder = "message · /help for commands · ! for shell"
   static let busyPlaceholder = "type to queue · esc interrupts"
 
   /// Asks the terminal for its background color (OSC 11) and flips `ANSI.lightBackground`
@@ -198,10 +201,15 @@ final class Screen: @unchecked Sendable {
   // MARK: Bar state
 
   func setStatus(_ line: String?) {
+    setStatus(lines: line.map { [$0] } ?? [])
+  }
+
+  /// A multi-row status block (the permission prompt's option panel); `[]` hides it.
+  func setStatus(lines: [String]) {
     guard isActive, !closed else { return }
     lock.lock()
     defer { lock.unlock() }
-    status = line
+    statusLines = lines
     repaint()
   }
 
@@ -242,6 +250,29 @@ final class Screen: @unchecked Sendable {
     infoLeft = left
     infoRight = right
     repaint()
+  }
+
+  /// The permission mode shown bottom-left in the input box's border (the mirror of the
+  /// top border's "N queued" tag): `╰─ acceptEdits ────╯`. `highlighted` styles it in the
+  /// secondary color so a non-default posture is visible at a glance; empty hides it.
+  func setMode(_ label: String, highlighted: Bool) {
+    guard isActive, !closed else { return }
+    lock.lock()
+    defer { lock.unlock() }
+    guard label != modeLabel || highlighted != modeHighlighted else { return }
+    modeLabel = label
+    modeHighlighted = highlighted
+    repaint()
+  }
+
+  /// The slash-command autocomplete popup's rows (already styled), drawn directly under
+  /// the input box; `[]` hides it. Stored only — the caller's next `setInput` repaints,
+  /// so a keystroke costs one redraw, not two.
+  func setCompletions(_ lines: [String]) {
+    guard isActive, !closed else { return }
+    lock.lock()
+    defer { lock.unlock() }
+    completions = lines
   }
 
   func setPlaceholder(_ text: String) {
@@ -320,7 +351,7 @@ final class Screen: @unchecked Sendable {
       widths.append(ANSIText.visibleCount(clamped))
       topCount = 1
     }
-    if let status {
+    for status in statusLines {
       let clamped = ANSIText.clampTail(status, to: columns - 1) + "\u{1B}[0m"
       lines.append(clamped)
       widths.append(ANSIText.visibleCount(clamped))
@@ -347,15 +378,32 @@ final class Screen: @unchecked Sendable {
         lines.append(info)
         widths.append(ANSIText.visibleCount(info))
       }
+      // The `!` shell escape tints the whole box orange — the visibly changed state is
+      // what says Enter runs a command in the user's shell instead of sending a message.
+      let shellInput = Bang.isShellBuffer(buffer)
+      let tint: (String) -> String = shellInput ? ANSI.shell : ANSI.accent
       let label = queued > 0 ? " \(queued) queued " : ""
-      lines.append(ANSI.accent("╭─") + ANSI.dim(label)
-        + ANSI.accent(String(repeating: "─", count: max(0, boxWidth - 3 - label.count)) + "╮"))
-      let (view, column) = inputLine(inner: inner)
+      lines.append(tint("╭─") + ANSI.dim(label)
+        + tint(String(repeating: "─", count: max(0, boxWidth - 3 - label.count)) + "╮"))
+      let (view, column) = inputLine(inner: inner, tint: tint, shellInput: shellInput)
       inputColumn = column
       inputRow = lines.count
       lines.append(view)
-      lines.append(ANSI.accent("╰" + String(repeating: "─", count: boxWidth - 2) + "╯"))
+      // The permission mode rides the bottom border's left corner, the way the queued
+      // count rides the top's — same width math, so the border stays exactly boxWidth.
+      // Shell mode borrows the tag while it lasts; deleting the `!` brings the mode back.
+      let modeText = shellInput ? " \(Bang.modeTag) " : (modeLabel.isEmpty ? "" : " \(modeLabel) ")
+      let styledMode = shellInput
+        ? ANSI.shell(modeText)
+        : (modeHighlighted ? ANSI.secondary(modeText) : ANSI.dim(modeText))
+      lines.append(tint("╰─") + styledMode
+        + tint(String(repeating: "─", count: max(0, boxWidth - 3 - modeText.count)) + "╯"))
       widths.append(contentsOf: [boxWidth, boxWidth, boxWidth])
+      for row in completions {
+        let clamped = ANSIText.clampHead(row, to: columns - 1)
+        lines.append(clamped)
+        widths.append(ANSIText.visibleCount(clamped))
+      }
     }
 
     if !lines.isEmpty {
@@ -416,8 +464,10 @@ final class Screen: @unchecked Sendable {
   }
 
   /// The box's middle row and the 0-based screen column for the cursor. Long input
-  /// slides a window so the cursor stays visible; the line never wraps.
-  private func inputLine(inner: Int) -> (String, Int) {
+  /// slides a window so the cursor stays visible; the line never wraps. `tint` styles
+  /// the border and prompt (orange in shell mode), and `shellInput` tints the typed
+  /// text too — styling is zero-width, so the cursor math is untouched.
+  private func inputLine(inner: Int, tint: (String) -> String, shellInput: Bool) -> (String, Int) {
     let promptWidth = prompt.count
     let available = max(1, inner - promptWidth)
     var shown: String
@@ -427,8 +477,8 @@ final class Screen: @unchecked Sendable {
       shown = ANSI.dim(hint)
       cursorOffset = 0
       let pad = available - hint.count
-      let row = ANSI.accent("│") + " " + ANSI.accent(prompt) + shown
-        + String(repeating: " ", count: max(0, pad)) + " " + ANSI.accent("│")
+      let row = tint("│") + " " + tint(prompt) + shown
+        + String(repeating: " ", count: max(0, pad)) + " " + tint("│")
       return (row, 2 + promptWidth)
     }
     let characters = Array(buffer)
@@ -442,10 +492,13 @@ final class Screen: @unchecked Sendable {
     if start > 0 {
       shown = "…" + String(shown.dropFirst())
     }
+    if shellInput {
+      shown = ANSI.shell(shown)
+    }
     cursorOffset = min(cursor, characters.count) - start
     let pad = available - window.count
-    let row = ANSI.accent("│") + " " + ANSI.accent(prompt) + shown
-      + String(repeating: " ", count: max(0, pad)) + " " + ANSI.accent("│")
+    let row = tint("│") + " " + tint(prompt) + shown
+      + String(repeating: " ", count: max(0, pad)) + " " + tint("│")
     return (row, 2 + promptWidth + cursorOffset)
   }
 
@@ -526,6 +579,30 @@ enum ANSIText {
       }
     }
     return ANSI.dim("…") + activeStyles + tail
+  }
+
+  /// Keeps the first `max` visible characters (a completion row's information leads the
+  /// line), closing any open style and appending a dim ellipsis when anything was dropped.
+  static func clampHead(_ styled: String, to max: Int) -> String {
+    let tokens = tokenize(styled)
+    let visible = tokens.reduce(0) { count, token in
+      if case .character = token { return count + 1 }
+      return count
+    }
+    guard visible > max, max > 1 else { return styled }
+    var kept = ""
+    var remaining = max - 1 // room for the ellipsis
+    for token in tokens {
+      if remaining == 0 { break }
+      switch token {
+      case .character(let character):
+        kept.append(character)
+        remaining -= 1
+      case .escape(let sequence):
+        kept += sequence
+      }
+    }
+    return kept + "\u{1B}[0m" + ANSI.dim("…")
   }
 
   private static func tokenize(_ text: String) -> [Token] {

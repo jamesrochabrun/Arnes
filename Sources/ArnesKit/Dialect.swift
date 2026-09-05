@@ -8,7 +8,7 @@ import Foundation
 /// `.messages`/`.responses` are the native paths for the Anthropic and OpenAI
 /// families. History stays chat-shaped internally and is translated per request,
 /// which is what keeps mid-session `/model` swaps working across dialects.
-public enum Dialect: String, Sendable {
+public enum Dialect: String, Codable, Sendable {
   /// OpenAI chat-completions shape — the universal default.
   case chat
   /// Anthropic Messages shape — native for `anthropic/*` models.
@@ -39,7 +39,7 @@ public enum DialectOverride: String, Sendable, CaseIterable {
 
 /// A model family, inferred from the OpenRouter slug's author prefix.
 /// Prompt packs and dialects key off this.
-public enum ModelFamily: String, Sendable {
+public enum ModelFamily: String, Codable, Sendable {
   case anthropic
   case openai
   case google
@@ -63,6 +63,44 @@ public enum ModelFamily: String, Sendable {
     case "qwen": self = .qwen
     default: self = .other
     }
+  }
+
+  /// Family for routers whose model names carry no author prefix — LiteLLM aliases
+  /// like `sonnet`, deployments like `bedrock/anthropic.claude-3-7-sonnet` or
+  /// `azure/gpt-4o-prod`. Well-known name stems win (a Bedrock or Vertex deployment
+  /// can host any family), then the router's provider tag, then the author-prefix rule.
+  /// Still a name→family mapping, not a capability: those keep coming from the manifest.
+  public init(inferringFrom name: String, provider: String? = nil) {
+    let tokens = name.lowercased()
+      .split(whereSeparator: { "/-_.:@ ".contains($0) })
+      .map(String.init)
+    if let fromName = tokens.lazy.compactMap(Self.family(forToken:)).first {
+      self = fromName
+      return
+    }
+    switch provider?.lowercased() {
+    case "anthropic": self = .anthropic
+    case "openai", "azure", "azure_ai": self = .openai
+    case "gemini", "google", "vertex_ai", "google_ai_studio": self = .google
+    case "xai": self = .xai
+    case "meta", "meta_llama": self = .meta
+    case "deepseek": self = .deepseek
+    case "mistral": self = .mistral
+    case "qwen": self = .qwen
+    default: self = ModelFamily(modelId: name)
+    }
+  }
+
+  private static func family(forToken token: String) -> ModelFamily? {
+    if token.hasPrefix("claude") { return .anthropic }
+    if token.hasPrefix("gpt") || ["o1", "o3", "o4", "o5", "chatgpt", "codex"].contains(token) { return .openai }
+    if token.hasPrefix("gemini") || token.hasPrefix("gemma") { return .google }
+    if token.hasPrefix("grok") { return .xai }
+    if token.hasPrefix("llama") { return .meta }
+    if token.hasPrefix("deepseek") { return .deepseek }
+    if ["mistral", "mixtral", "codestral", "ministral", "magistral", "pixtral"].contains(where: token.hasPrefix) { return .mistral }
+    if token.hasPrefix("qwen") || token.hasPrefix("qwq") { return .qwen }
+    return nil
   }
 
   /// The dialect this family speaks natively.

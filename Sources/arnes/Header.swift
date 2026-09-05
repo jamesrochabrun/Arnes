@@ -13,20 +13,42 @@ import Glibc
 /// TTY-gated: piped output gets one plain line so transcripts stay grep-able. The box
 /// sizes to its longest line and shrinks (content truncated with …) on narrow terminals.
 enum Header {
+  /// - Parameters:
+  ///   - provider: a `provider <name> · host/path` line for non-OpenRouter providers, so it
+  ///     is always visible where requests (and the key) are going.
+  ///   - mode: the permission mode when it isn't `default` (`plan`, `acceptEdits`,
+  ///     `bypass`) — a session that can't write, or won't ask, should say so up front.
+  ///   - memory: the run's memory tag (`memory 42 lines`, `memory none yet`); nil when off.
+  ///   - limits: the stop conditions the session was started with (`budget $0.50 · max 10
+  ///     steps`), when any is set — the knobs `--budget`/`--max-steps` turn.
   static func banner(
     version: String,
     model: String,
     dialect: String,
+    provider: String? = nil,
     directory: String = FileManager.default.currentDirectoryPath,
     mcpServers: Int = 0,
     mcpTools: Int = 0,
     skills: Int = 0,
     agents: Int = 0,
+    judge: String? = nil,
+    sandbox: String? = nil,
+    hooks: String? = nil,
+    effort: String? = nil,
+    environment: String? = nil,
+    addedDirectories: Int = 0,
+    mode: String? = nil,
+    memory: String? = nil,
+    agent: String? = nil,
+    limits: String? = nil,
     resumeLine: String? = nil)
     -> String
   {
     guard ANSI.isTTY else {
       var line = "arnes v\(version) · \(model)"
+      if let provider { line += " · \(provider)" }
+      if let agent { line += " · agent \(agent)" }
+      if let mode { line += " · mode \(mode)" }
       if let resumeLine { line += " · \(resumeLine)" }
       return line + " · /help for commands"
     }
@@ -35,6 +57,7 @@ enum Header {
     var lines: [(plain: String, styled: String)] = []
     let modelSuffix = " · dialect \(dialect) · /help"
     lines.append((model + modelSuffix, model + ANSI.dim(modelSuffix)))
+    if let provider { lines.append((provider, ANSI.cyan(provider))) }
     var info = abbreviatingHome(directory)
     if mcpServers > 0 {
       let servers = "\(mcpServers) MCP server\(mcpServers == 1 ? "" : "s")"
@@ -47,6 +70,18 @@ enum Header {
     if agents > 0 {
       info += " · \(agents) agent\(agents == 1 ? "" : "s")"
     }
+    if let judge { info += " · judge \(judge)" }
+    if let sandbox { info += " · \(sandbox)" }
+    if let hooks { info += " · \(hooks)" }
+    if let effort { info += " · effort \(effort)" }
+    if let agent { info += " · agent \(agent)" }
+    if let mode { info += " · mode \(mode)" }
+    if let limits { info += " · \(limits)" }
+    if let environment { info += " · \(environment)" }
+    if addedDirectories > 0 {
+      info += " · +\(addedDirectories) dir\(addedDirectories == 1 ? "" : "s")"
+    }
+    if let memory { info += " · \(memory)" }
     lines.append((info, ANSI.dim(info)))
     if let resumeLine { lines.append((resumeLine, ANSI.dim(resumeLine))) }
 

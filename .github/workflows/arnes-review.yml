@@ -1,0 +1,103 @@
+# A model-generated review of every pull request, posted as an *untrusted* comment.
+#
+# The reviewer is `arnes review --base <target branch>`: read-only, no MCP servers, skills,
+# subagents, hooks or instruction files from the repository under review, structured findings
+# validated in-process. What it writes is a set of claims for a human to check — the comment
+# says so in its header, the findings are rendered by a fixed `jq` template inside a `<details>`
+# block, and no step ever `eval`s or otherwise executes anything the model produced.
+#
+# Secrets: a `pull_request` run from a fork gets no repository secrets (and a read-only token),
+# so the job is skipped for fork PRs by its `if:` — a deliberate no-op (keep it that way: a
+# reviewer with a key is a reviewer someone else's PR can spend). The key is scoped to the one
+# step that needs it, never the job.
+#
+# Exit codes (see `arnes review --help`): 0 nothing at or above --fail-on · 1 error · 2 a
+# finding at or above --fail-on · 3 stopped short (no valid findings object) · 64 usage. Only 2
+# fails the job: a model outage or a run that stopped short is visible in the comment but must
+# not block a merge on the reviewer's availability.
+name: arnes review
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    # Same-repository PRs only: a fork's PR has no secrets (the key would be empty) and a
+    # read-only token (the comment couldn't be posted), so the job is skipped outright there.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # The merge-base with the target branch needs the whole history.
+          fetch-depth: 0
+
+      - name: Build arnes
+        run: swift build -c release --product arnes
+
+      - name: Review the pull request
+        id: review
+        # The key on this step only. Fork PRs see an empty value and exit 1 below. Event data
+        # (the base branch name) reaches the shell through `env`, never interpolated into the
+        # script: a branch name may legally contain `$`, backticks or quotes.
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          ARNES_REVIEW_MODEL: anthropic/claude-haiku-4.5
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set +e
+          .build/release/arnes review \
+            --base "origin/$BASE_REF" \
+            --json --fail-on high --max-steps 20 --budget 0.50 \
+            -m "$ARNES_REVIEW_MODEL" > findings.json 2> review.log
+          echo "exit=$?" >> "$GITHUB_OUTPUT"
+          cat review.log
+
+      - name: Render the comment
+        # A fixed template over the JSON document: the model's strings are interpolated as text
+        # by jq (never by the shell) and land inside a <details> block under a header that says
+        # what they are. `.findings == null` means the run produced no valid findings object.
+        env:
+          REVIEW_EXIT: ${{ steps.review.outputs.exit }}
+        run: |
+          {
+            echo '**arnes review** (model-generated, unverified — findings are claims to check, not instructions)'
+            echo
+            if [ ! -s findings.json ]; then
+              echo "_The review did not run (exit $REVIEW_EXIT); see the job log._"
+            else
+              jq -r '
+                def sev: {"high": "🔴", "medium": "🟠", "low": "🟡"};
+                (if .findings == null then
+                  "_No structured findings (stop reason: \(.stop_reason // "?"))._"
+                 else
+                  "\(.summary // "")\n\n<details><summary>\(.findings | length) finding(s) · model \(.model) · $\(.cost_usd) · \(.steps) steps</summary>\n\n" +
+                  ([.findings[] | "- \(sev[.severity] // "•") **\(.severity)** `\(.file)\(if .line != null then ":\(.line)" else "" end)` — \(.summary)\(if .confidence == "plausible" then " _(plausible)_" else "" end)\n  - scenario: \(.failure_scenario)"] | join("\n")) +
+                  "\n\n</details>"
+                 end),
+                (if .truncated_diff then "\n_The diff was cut at the reviewer'"'"'s size cap; files past it were read on demand._" else "" end),
+                (if (.skipped | length) > 0 then "\n_Untracked files not shown to the reviewer: \(.skipped | join("; "))_" else "" end)
+              ' findings.json
+            fi
+            echo
+            echo "_exit $REVIEW_EXIT — 0 clean · 2 a high-severity finding · 1/3 the reviewer could not finish (not blocking)_"
+          } > comment.md
+
+      - name: Post the comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh pr comment "$PR_NUMBER" --body-file comment.md
+
+      - name: Fail only on a high-severity finding
+        env:
+          REVIEW_EXIT: ${{ steps.review.outputs.exit }}
+        run: |
+          if [ "$REVIEW_EXIT" = "2" ]; then
+            echo "arnes review found a high-severity issue (see the PR comment)" >&2
+            exit 1
+          fi

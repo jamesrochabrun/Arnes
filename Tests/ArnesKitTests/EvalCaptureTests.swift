@@ -45,6 +45,21 @@ final class EvalCaptureTests: XCTestCase {
     XCTAssertNotNil(EvalCapture.validate(empty))
   }
 
+  func testValidateRejectsIdsThatCouldEscapeTheSuiteDirectory() {
+    // The writer model picks the id and the id becomes the file name.
+    for unsafe in ["../../../tmp/evil", "/etc/cron.d/job", "nested/task", ".hidden", "has space", "semi;colon"] {
+      let task = EvalTask(id: unsafe, prompt: "p", check: "false")
+      XCTAssertTrue(
+        EvalCapture.validate(task)?.contains("kebab-case") == true,
+        "expected \(unsafe) to be rejected")
+      XCTAssertFalse(EvalCapture.isSafeTaskId(unsafe))
+    }
+    for safe in ["append-max-to-file", "fix_bug-2", "Task01"] {
+      XCTAssertTrue(EvalCapture.isSafeTaskId(safe))
+    }
+    XCTAssertFalse(EvalCapture.isSafeTaskId(String(repeating: "a", count: 101)))
+  }
+
   // MARK: Distiller
 
   func testDistillerRetriesWithFeedbackThenSucceeds() async throws {

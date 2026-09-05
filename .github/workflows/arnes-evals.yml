@@ -1,0 +1,145 @@
+# An eval suite as a CI gate, run on demand.
+#
+# `arnes eval <suite> -m <model> --parallel N --min-pass X --compare last --json` runs every
+# task of the suite N trials at a time in isolated, sandboxed temp workdirs, scores each with
+# its bash `check`, sets each task against its own history and prints one JSON document. What
+# it gates: the pass rate of the model under test on the suite (`--min-pass`, every model must
+# reach it) — a prompt-pack, tool or harness change that drops a task the model used to pass
+# shows up as a failed gate here, and as a `regressions` entry when a baseline exists. What it
+# costs: one model request per step of every trial (evals/basics on a cheap model is cents;
+# `-t 3` triples it) — the model and suite are inputs so a run never spends more than asked.
+#
+# Baseline: `--compare` reads `~/.arnes/evals.jsonl`, which a fresh runner doesn't have — the
+# compare block is then empty (`no_baseline` lists every task, `regressions`/`fixes` are `[]`)
+# and only `--min-pass` gates. To make the comparison real, persist that file between runs with
+# `actions/cache` keyed on the suite (the step below does; the cache is restored before the run
+# and saved after it, so today's rows are tomorrow's baseline).
+#
+# Secrets: the key is scoped to the one step that runs the suite, never the job; the suite runs
+# from this repository's own checkout (a `workflow_dispatch` on a branch someone else pushed is
+# a maintainer's decision, not a fork's).
+#
+# Exit codes (see `arnes eval --help`): 0 gate passed (or none set) · 2 the gate failed · 1 the
+# command itself failed (the suite didn't load, the provider was down) · 64 usage. Only 2 fails
+# the job: a model outage is visible in the summary but must not fail the gate on availability.
+name: arnes evals
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Suite directory or task file
+        default: evals/basics
+      model:
+        description: Model to evaluate (id or a configured alias)
+        default: deepseek/deepseek-v4-flash
+      min_pass:
+        description: Minimum pass rate (0…1) every model must reach
+        default: "1.0"
+      parallel:
+        description: Trials run at once
+        default: "4"
+
+permissions:
+  contents: read
+
+jobs:
+  eval:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build arnes
+        run: swift build -c release --product arnes
+
+      - name: Restore the eval history (the --compare baseline)
+        # Keyed on the suite: a restore-key prefix picks the latest history for it, and the
+        # save step below writes today's rows back so the next run has a baseline.
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.arnes/evals.jsonl
+          key: arnes-evals-${{ github.event.inputs.suite }}-${{ github.run_id }}
+          restore-keys: |
+            arnes-evals-${{ github.event.inputs.suite }}-
+
+      - name: Run the suite
+        id: eval
+        # The key on this step only. Every input reaches the shell through `env`, never
+        # interpolated into the script: an input is free text.
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          SUITE: ${{ github.event.inputs.suite }}
+          MODEL: ${{ github.event.inputs.model }}
+          MIN_PASS: ${{ github.event.inputs.min_pass }}
+          PARALLEL: ${{ github.event.inputs.parallel }}
+        run: |
+          set +e
+          .build/release/arnes eval "$SUITE" -m "$MODEL" \
+            --parallel "$PARALLEL" --min-pass "$MIN_PASS" --compare last \
+            --json > eval-report.json 2> eval.log
+          echo "exit=$?" >> "$GITHUB_OUTPUT"
+          cat eval.log
+
+      - name: Save the eval history
+        # Always, so a failed gate's rows are part of tomorrow's baseline too.
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.arnes/evals.jsonl
+          key: arnes-evals-${{ github.event.inputs.suite }}-${{ github.run_id }}
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: |
+            eval-report.json
+            eval.log
+          if-no-files-found: warn
+
+      - name: Summarize
+        # A fixed jq template over the document: the models table, then the comparison. The
+        # model's strings (task ids, error text) are interpolated as text by jq, never by the
+        # shell, and nothing here is executed.
+        if: always()
+        env:
+          EVAL_EXIT: ${{ steps.eval.outputs.exit }}
+        run: |
+          {
+            echo "## arnes eval"
+            echo
+            if [ ! -s eval-report.json ]; then
+              echo "_The suite did not run (exit $EVAL_EXIT); see the job log._"
+            else
+              jq -r '
+                "suite `\(.suite)` · gate \(if .gate.passed then "**passed**" else "**FAILED**" end)" +
+                (if .gate.min_pass != null then " (min pass \(.gate.min_pass * 100 | floor)%)" else "" end) +
+                "\n\n| model | dialect | pass | pass@k | pass^k | cost | avg steps | avg time | errors |\n|---|---|---|---|---|---|---|---|---|\n" +
+                ([.models[] | "| \(.model) | \(.dialect // "–") | \(.passed)/\(.trials) (\(.pass_rate * 100 | floor)%) | \(if .pass_at_k != null then "\(.pass_at_k * 100 | floor)% (k=\(.k))" else "–" end) | \(if .pass_pow_k != null then "\(.pass_pow_k * 100 | floor)%" else "–" end) | $\(.cost_usd) | \(.avg_steps) | \(.avg_seconds)s | \(.errors) |"] | join("\n")) +
+                (if .regressions == null then "\n\n_No --compare baseline read._"
+                 elif (.regressions | length) == 0 and (.fixes | length) == 0 then
+                   "\n\n_No regressions, no fixes against the baseline (\(.no_baseline | length) task(s) had no baseline)._"
+                 else
+                   "\n\n**Regressions:** " + (if (.regressions | length) == 0 then "none" else ([.regressions[] | "`\(.task)` \(.previous_pass_rate * 100 | floor)% → \(.current_pass_rate * 100 | floor)%"] | join(", ")) end) +
+                   "\n\n**Fixes:** " + (if (.fixes | length) == 0 then "none" else ([.fixes[] | "`\(.task)` \(.previous_pass_rate * 100 | floor)% → \(.current_pass_rate * 100 | floor)%"] | join(", ")) end)
+                 end) +
+                (if ([.outcomes[] | select(.passed == false)] | length) > 0 then
+                   "\n\n<details><summary>failed trials</summary>\n\n" +
+                   ([.outcomes[] | select(.passed == false) | "- `\(.task)` trial \(.trial) · \(.model) · \(.stop_reason // "?")\(if .error != null then " · \(.error)" else "" end)"] | join("\n")) +
+                   "\n\n</details>"
+                 else "" end)
+              ' eval-report.json
+            fi
+            echo
+            echo "_exit $EVAL_EXIT — 0 gate passed · 2 gate failed · 1 the suite could not run (not failing the job)_"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail only when the gate failed
+        env:
+          EVAL_EXIT: ${{ steps.eval.outputs.exit }}
+        run: |
+          if [ "$EVAL_EXIT" = "2" ]; then
+            echo "arnes eval: the gate failed (see the job summary)" >&2
+            exit 1
+          fi

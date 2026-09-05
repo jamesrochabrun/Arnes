@@ -1,0 +1,7 @@
+{
+  "id": "deep-sum-no-overflow",
+  "prompt": "acc.py defines deep_sum(n), the sum of the integers from 1 to n. It must return the correct value for n as large as 1000000 without raising an error. It currently fails for large n. Fix it; keep the name and signature and keep the returned values identical for every valid n >= 0.",
+  "setup": "cat > acc.py <<'FEOF'\ndef deep_sum(n):\n    if n == 0:\n        return 0\n    return n + deep_sum(n - 1)\nFEOF",
+  "check": "python3 - <<'PYEOF'\nfrom acc import deep_sum\nassert deep_sum(0) == 0\nassert deep_sum(1) == 1\nassert deep_sum(10) == 55\nassert deep_sum(1000) == 500500\nassert deep_sum(1000000) == 500000500000\nprint(\"ok\")\nPYEOF",
+  "timeoutSeconds": 300
+}

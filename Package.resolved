@@ -14,8 +14,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/jamesrochabrun/OpenRouterSwift",
       "state" : {
-        "revision" : "aef62e0f8c2508680d8caaa4ef1d542ce4008b1b",
-        "version" : "0.1.1"
+        "revision" : "4652542542c964143ba8e18ba568ade99f317be2",
+        "version" : "0.2.0"
       }
     },
     {

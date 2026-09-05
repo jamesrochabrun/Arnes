@@ -1,0 +1,7 @@
+{
+  "id": "split-cents-remainder",
+  "prompt": "split.py defines split(total, n). It must divide `total` cents among n people so that: the list has length n, the amounts sum to exactly total, any two amounts differ by at most 1 cent, and the extra cents go to the earliest people (the first `total % n` people each get one more cent than the rest). Assume total >= 0 and n >= 1. It currently drops the remainder. Fix it; keep the name and signature.",
+  "setup": "cat > split.py <<'FEOF'\ndef split(total, n):\n    base = total // n\n    return [base] * n\nFEOF",
+  "check": "python3 - <<'PYEOF'\nfrom split import split\nfor total in range(0, 41):\n    for n in range(1, 10):\n        r = split(total, n)\n        assert isinstance(r, list) and len(r) == n, (total, n, r)\n        assert sum(r) == total, (total, n, r)\n        assert max(r) - min(r) <= 1, (total, n, r)\n        base, rem = total // n, total % n\n        assert r == [base + 1] * rem + [base] * (n - rem), (total, n, r)\nprint(\"ok\")\nPYEOF",
+  "timeoutSeconds": 300
+}

@@ -76,7 +76,7 @@ final class ToolTests: XCTestCase {
       "path": .string(path),
       "content": .string("hello\nworld"),
     ])
-    XCTAssertTrue(writeResult.contains("wrote"))
+    XCTAssertTrue(writeResult.hasPrefix("created "), writeResult)
 
     let read = ReadFileTool()
     let readResult = try await read.execute(arguments: ["path": .string(path)])

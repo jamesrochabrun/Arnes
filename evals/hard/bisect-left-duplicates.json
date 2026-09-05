@@ -1,0 +1,7 @@
+{
+  "id": "bisect-left-duplicates",
+  "prompt": "search.py defines bisect_left(a, x). It must return the leftmost index at which x can be inserted into the already-sorted list a to keep it sorted \u2014 identical to Python's bisect.bisect_left for ALL inputs, including duplicates, the empty list, and values below or above the range. It is subtly wrong. Fix it; keep the name and signature.",
+  "setup": "cat > search.py <<'FEOF'\ndef bisect_left(a, x):\n    lo, hi = 0, len(a)\n    while lo < hi:\n        mid = (lo + hi) // 2\n        if a[mid] <= x:\n            lo = mid + 1\n        else:\n            hi = mid\n    return lo\nFEOF",
+  "check": "python3 - <<'PYEOF'\nimport random, bisect\nfrom search import bisect_left\nrandom.seed(0)\ncases = [[], [1], [1,1,1], [1,2,2,2,3], list(range(0,10,2)), [5,5,5,5]]\nfor _ in range(400):\n    n = random.randint(0, 12)\n    cases.append(sorted(random.randint(0, 6) for _ in range(n)))\nfor a in cases:\n    for x in range(-1, 8):\n        got, want = bisect_left(a, x), bisect.bisect_left(a, x)\n        assert got == want, (a, x, got, want)\nprint(\"ok\")\nPYEOF",
+  "timeoutSeconds": 300
+}

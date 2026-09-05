@@ -1,0 +1,7 @@
+{
+  "id": "wide-search-delegates",
+  "prompt": "The notes/ directory holds thirty meeting notes. Exactly one of them records the name the release will ship under. Find it and write just that name to answer.txt.",
+  "setup": "mkdir -p notes; for i in $(seq 1 30); do { printf 'Meeting %s\\n\\n' \"$i\"; for j in $(seq 1 24); do printf 'Item %s.%s: discussed the release schedule, the on-call rotation and the open incidents; no decision on naming.\\n' \"$i\" \"$j\"; done; printf 'Action: circulate the release checklist before the next meeting.\\n'; } > \"notes/meeting-$i.txt\"; done; printf 'Meeting 17\\n\\nItem 17.1: discussed the release schedule; the team agreed to ship it under the name TAMARIND.\\n' > notes/meeting-17.txt; for j in $(seq 2 24); do printf 'Item 17.%s: discussed the on-call rotation and the open incidents.\\n' \"$j\" >> notes/meeting-17.txt; done; { cat \"$HOME/.arnes/runs.jsonl\" 2>/dev/null || true; } | wc -l | tr -d ' ' > .runs-before",
+  "check": "test \"$(tr -d ' \\n' < answer.txt | tr '[:lower:]' '[:upper:]')\" = TAMARIND && if [ -n \"$ARNES_SESSION_ID\" ]; then grep \"\\\"parentSessionId\\\":\\\"$ARNES_SESSION_ID\\\"\" \"$HOME/.arnes/runs.jsonl\" | grep -q '\"agent\":\"explore\"'; else tail -n \"+$(( $(cat .runs-before) + 1 ))\" \"$HOME/.arnes/runs.jsonl\" | grep -q '\"agent\":\"explore\"'; fi",
+  "timeoutSeconds": 300
+}
