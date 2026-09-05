@@ -1,12 +1,13 @@
 # Arnes — Contributor & Agent Instructions
 
-The full record for working on this repo: invariants, the per-file layout map, and the
-`## Status` history of what shipped and why. `CLAUDE.md` is a symlink to this file. `AGENTS.md`
-is a **separate, short standing-instructions file** (the invariants, code style, a grouped
-layout, how to build/test) because arnes and Codex cap instruction files at 32 KB and this file
-is far past it — keep the two in sync when an invariant, a command or a convention changes;
-history goes only here. Read `DESIGN.md` first for the architecture and roadmap; this file is the
-*how*, that one is the *why*.
+The full record for working on this repo: invariants, the per-file layout map, and the `## Status`
+history of what shipped and why. `AGENTS.md` is a **separate, short standing-instructions file**
+(the invariants, code style, a grouped layout, how to build/test) and `CLAUDE.md` symlinks to
+*that*, not to this file: harnesses cap instruction files (arnes and Codex at 32 KB) and this one is
+far past it, so pointing a harness here spends ~180k tokens of system prompt and leaves a subagent
+no working room. Keep the two in sync when an invariant, a command or a convention changes; history
+goes only here. Read `DESIGN.md` first for the architecture and roadmap; this file is the *how*,
+that one is the *why*.
 
 ## What this is
 
@@ -5801,5 +5802,14 @@ Bun installs work). `scripts/npm-release.sh` generates the publishable dirs; aut
       designed. Residue unchanged: no JSON
       envelope for an escalated run; `arnes agents apply <layout>`
       from another directory needs `--into`; the wide-arm delegation override stays unmerged (§3c).
+- [x] `CLAUDE.md` points at `AGENTS.md` (2026-09-05) — the batch-11/12/13 gotcha fixed in the
+      committed state instead of worked around per batch. The symlink pointed at this file, so every
+      harness that reads `CLAUDE.md` — and every subagent it spawns — inherited ~180k tokens of
+      system prompt: four agents died of autocompact thrashing in batch 13 before the cause was
+      found, and batches 14–16 ran under a temporary `ln -sfn AGENTS.md CLAUDE.md` +
+      `git update-index --assume-unchanged`, restored before each commit. `CLAUDE.md` → `AGENTS.md`
+      is now what ships, so the workaround is gone and every toolchain reads the same 15 KB standing
+      file (`ProjectInstructions` already resolved `AGENTS.md` first; only a `CLAUDE.md`-only reader
+      followed the symlink here). The history stays in this file, read on demand.
 - [ ] OS sandbox: Linux backend (bwrap/landlock); macOS shipped.
 - [ ] Scoreboard-driven routing defaults; gated pack proposals

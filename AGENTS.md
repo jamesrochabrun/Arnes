@@ -1,9 +1,10 @@
 # Arnes — Standing Instructions
 
-The short file every agent harness loads (arnes and Codex cap instruction files at 32 KB).
-`INSTRUCTIONS.md` is the full record — the per-file layout map and the `## Status` history of
-what shipped and why — and `CLAUDE.md` links to it. Read the Status entry for the area you touch
-before changing it; edit history there, edit standing rules here. `DESIGN.md` is the *why*.
+The short file every agent harness loads (arnes and Codex cap instruction files at 32 KB);
+`CLAUDE.md` is a symlink to this file. `INSTRUCTIONS.md` is the full record — the per-file layout
+map and the `## Status` history of what shipped and why — read on demand, never loaded. Read the
+Status entry for the area you touch before changing it; edit history there, edit standing rules
+here. `DESIGN.md` is the *why*.
 
 ## What this is
 
