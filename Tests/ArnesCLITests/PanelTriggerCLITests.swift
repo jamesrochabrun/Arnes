@@ -8,7 +8,7 @@ import XCTest
 /// error before anything connects, `policies.panelOnVerifierFail` decodes (and an old config
 /// without it round-trips byte for byte) and reaches `ArnesRuntime`, and the two pure rules — the
 /// arming rule and the final-exit rule — plus the pre-run snapshot's layout. The end-to-end
-/// escalation is the integrator's live check (a `Do.run` needs a network).
+/// escalation needs a live check (a `Do.run` needs a network).
 final class PanelTriggerCLITests: XCTestCase {
   private func provider() throws -> ResolvedProvider {
     try ProviderResolver.resolve(

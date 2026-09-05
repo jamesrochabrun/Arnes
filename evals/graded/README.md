@@ -2,7 +2,7 @@
 
 Run with `arnes eval evals/graded -m <model> --judge <cheap model> --verify <cheap model>`.
 `evals/basics` stays the ungraded A/B baseline; this suite exists to exercise the three
-optional task keys, so the integrator's A/B runs are not disturbed by them.
+optional task keys, so the A/B runs are not disturbed by them.
 
 - **`add-docstring-rubric`** — the check proves a docstring exists and the program still
   prints 12; the **rubric** (three criteria, threshold 0.7, `gate: true`) decides whether the

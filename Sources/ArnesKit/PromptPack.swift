@@ -102,8 +102,8 @@ public struct PromptPack: Sendable {
 
   /// One extra paragraph per family where the base needs a lean: appended after
   /// `baseDelegation` for that family only; families without an entry get the base alone.
-  /// A pack text change is a proposal (invariant 6) — the integrator A/Bs it on
-  /// `evals/subagents` before it ships.
+  /// A pack text change is a proposal (invariant 6) — A/B it on `evals/subagents`
+  /// before it ships.
   static let familyDelegationDefaults: [ModelFamily: String] = [
     .anthropic: """
       Prefer working directly unless the task is clearly parallel or context-heavy: one \

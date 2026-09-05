@@ -2,8 +2,8 @@
 
 Three prompt-pack proposals have waited on an eval A/B since batches 6, 9 and 11, because the
 A/B could not be run. P1 built the switches, the variant files and a probe task; **it flipped no
-default and changed no pack sentence**. This file is the recipe the integrator runs on the
-gateway, and the decision rules that turn its numbers into a merge or a "recorded, kept off".
+default and changed no pack sentence**. This file is the recipe you run on the gateway, and the
+decision rules that turn its numbers into a merge or a "recorded, kept off".
 
 ## The switches
 
@@ -137,7 +137,7 @@ arnes eval evals/basics -m deepseek,haiku -t 2 --label delegate-wide-basics   # 
 ```
 
 **Do not change `baseDelegation` from one run** — the override directory is the proposal, the
-labelled rows are the evidence, and the merge is the integrator's after both arms are read.
+labelled rows are the evidence, and the merge is yours after both arms are read.
 `arnes evals transcript <id>` on a trial shows whether the lead delegated and to whom
 (`explore` is demanded by name; see `evals/subagents/README.md`).
 

@@ -350,7 +350,7 @@ public actor Session {
     compactionSummary = loaded.compactionSummary
     // Seed the microcompaction cutoff from the resumed history so `/context` and `/btw` right
     // after `--continue` measure the stubbed request view, not the unstubbed transcript; the
-    // first turn start would recompute it anyway (integrator, C2's flagged follow-up).
+    // first turn start would recompute it anyway (a follow-up flagged by C2).
     clearedBelow = Microcompaction.clearingCutoff(
       in: history, keepingRecent: configuration.compaction.keepRecentToolResults)
   }

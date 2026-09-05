@@ -42,7 +42,7 @@ final class PrefixStabilityTests: XCTestCase {
   /// encodes of one `[Tool]` gave 500 distinct byte strings in the runs where the allocator moved
   /// the storage, and one string in the rest — the ~1-in-6 flake). The values were always equal.
   /// OpenRouterSwift's transport encoder is the same unconfigured kind, so the *wire's* key order
-  /// varies the same way; sorting there is the integrator's fix, and no concern of this pin.
+  /// varies the same way; sorting there is an upstream fix, and no concern of this pin.
   private func toolBytes(_ request: ChatCompletionRequest) throws -> Data {
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys]
