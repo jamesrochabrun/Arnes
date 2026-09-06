@@ -1,13 +1,31 @@
 # Arnes
 
-*Arnés* — Spanish for **harness**. A model-adaptive agent harness for
-[OpenRouter](https://openrouter.ai), built in Swift.
+An open-source coding agent with model switching, built-in verification, and cost tracking.
+Use it in your terminal or embed the UI-free **ArnesKit** library in a Swift application.
+*Arnés* is Spanish for **harness**.
 
-Every major coding agent is tuned for one model family; swapping the model underneath leaves
-the wrong prompts and wire format in place. Arnes inverts that: **the model you pick drives
-everything** — the wire dialect, the prompt pack, the request shape — all discovered from
-OpenRouter's live model manifest, never hardcoded. See [DESIGN.md](DESIGN.md) for the full
-architecture; [INSTRUCTIONS.md](INSTRUCTIONS.md) if you're contributing.
+Arnes works with [OpenRouter](https://openrouter.ai), LiteLLM gateways, and other
+OpenAI-compatible endpoints. The chosen model and provider determine the wire dialect,
+family prompt pack, and request shape; manifests supply capabilities, context limits, and
+pricing. Switch models within a conversation, verify a change with another model, or compare
+models on repeatable tasks with recorded results and costs.
+
+- **Work interactively:** streamed replies, plan mode, file editing, shell commands,
+  screenshots on vision models, and resumable sessions with file checkpoints.
+- **Extend the agent:** skills, MCP servers, lifecycle hooks, and parallel or background subagents.
+- **Measure the work:** budgets, requested versus served models, prompt-cache usage,
+  evaluation suites, regression gates, and competing solutions judged from their diffs.
+- **Control execution:** permission rules and scoped grants, plus OS containment on macOS.
+
+This README describes the **v0.7.0 source on `main`**. As of September 5, 2026, the latest
+[published GitHub release is v0.6.0](https://github.com/jamesrochabrun/Arnes/releases/tag/v0.6.0).
+Packaged versions can lag behind this branch; check `arnes --version` and the
+[release notes](https://github.com/jamesrochabrun/Arnes/releases), or build from source below
+for the behavior documented here.
+
+[Quick start](#quick-start) · [Interactive commands](#interactive-mode) ·
+[Providers](#providers--gateways) · [Permissions](#permissions--trust) ·
+[MCP](#mcp-servers) · [Architecture](DESIGN.md) · [Contributing](#contributing)
 
 ## Install
 
@@ -16,10 +34,12 @@ manager works:
 
 ```bash
 bun add -g arnes                # or: npm install -g arnes
-bunx arnes                      # or zero-install one-off runs
 export OPENROUTER_API_KEY=sk-or-...
-arnes --help
+arnes --version
+arnes
 ```
+
+For a one-off launch after setting the key, use `bunx arnes` or `npx arnes`.
 
 The key can also live in `~/.arnes/credentials` (just the key on one line, or
 `OPENROUTER_API_KEY=sk-or-...`; `chmod 600` it) — used whenever the env var is unset, so
@@ -29,15 +49,48 @@ Not on OpenRouter? See [Providers & gateways](#providers--gateways) for LiteLLM 
 other OpenAI-compatible endpoints.
 
 Binaries are also attached to each [GitHub release](https://github.com/jamesrochabrun/Arnes/releases).
-Or build from source:
+To run the current source on macOS or Linux with a Swift toolchain:
 
 ```bash
 git clone https://github.com/jamesrochabrun/Arnes && cd Arnes
-./scripts/install.sh            # builds release + installs to /opt/homebrew/bin (pass a dir to override)
+swift build -c release --product arnes
+.build/release/arnes --version
+.build/release/arnes
 ```
 
-(The script removes the old binary and ad-hoc re-signs the new one — overwriting a signed
-binary in place gets it SIGKILLed on Apple Silicon.)
+On macOS, `./scripts/install-local.sh` installs the release build over the `arnes` on PATH
+(or into `/opt/homebrew/bin` if none is found) and prints a version, commit, time, and path
+receipt. It replaces the binary atomically to avoid macOS code-signature cache problems.
+The destination directory must exist and be writable.
+
+## Quick start
+
+Open a project and start Arnes:
+
+```bash
+cd path/to/your/project
+arnes
+```
+
+Ask `Explain how this project starts, and point me to the main files.` Then use
+`/plan Add a regression test for the bug in <file>` with a real file from your project.
+Arnes reads the code and proposes a plan; approve it to begin execution. Ordinary edits
+and shell commands that need permission prompt before running.
+
+Use `/diff` to inspect the changes, `/cost` to see the session spend, and `/verify` for a
+second model judgment of the last task. Verification is a model assessment of the report
+and diff; run the project's tests as well. `/undo` restores the last turn's checkpointed
+file edits, and `/save first-task` gives the conversation a name you can resume later.
+Shell-made edits and commits are not checkpointed.
+
+For a read-only report in a script:
+
+```bash
+arnes do "Explain how this project starts and identify the main files" --output-format json
+```
+
+For editing, add `--yes` and a budget appropriate to the task. See
+[Permissions & trust](#permissions--trust) for the limits that still apply.
 
 ## Interactive mode
 
@@ -80,6 +133,13 @@ Slash commands inside the REPL:
                   history is client-side, so 20 turns into Claude you can finish on GPT
                   (fuzzy search: "son5", "4o", "flash" all resolve; even across dialects —
                   anthropic→openai swaps the wire format under the same conversation)
+/models [query]  list the active provider's models, optionally fuzzy-filtered
+/plan <task>     propose a plan with mutations denied, then approve, revise, or cancel
+/permissions [mode|show|save]
+                  inspect or change permission mode and review session grants
+/skills          list available skills; invoke one with /<skill-name> (including /init)
+/agents          list subagents; /agents <name> <model|inherit> changes a model override
+/mcp [server]    inspect connected servers and their tools, resources, and prompts
 /cost             running session total (live usage.cost)
 /verify [model]   loop-1: a second model judges whether the last task was completed
 /compact [model] [instructions]
@@ -102,7 +162,6 @@ Slash commands inside the REPL:
                   session began, from the checkpoints
 /memory           the project's memory: where it lives, how much of it is loaded, the index
 /tasks            background subagents and shell jobs (`bash … background: true`) this session runs
-/status           key limits + credit balance
 /status           the session and its dials: id, name, fork parent, model, the dialect the
                   last turn actually used, effort, provider, mode, sandbox, hooks, messages,
                   cost vs budget, the measured context, taint, the model's current plan
@@ -126,8 +185,8 @@ Slash commands inside the REPL:
 /help /exit       (/quit and /q also exit)
 ```
 
-Sessions persist to `~/.arnes/sessions/` as every message lands (crash-safe), and every file
-the agent writes or edits is checkpointed first under `~/.arnes/checkpoints/<session>/` (owner-only,
+Sessions persist to `~/.arnes/sessions/` as every message lands (crash-safe), and files changed
+through `write_file` or `edit_file` are checkpointed first under `~/.arnes/checkpoints/<session>/` (owner-only,
 swept with the session), so a wrong edit is one `/rewind` away (`checkpoints: {enabled: false}`
 in `~/.arnes/config.json` turns it off). The model also keeps **memory** across sessions:
 `~/.arnes/memory/<project>/MEMORY.md` (notes it writes with the ordinary file tools — every such
@@ -169,7 +228,8 @@ arnes do "add a --version flag to main.swift" --yes \
   -m anthropic/claude-sonnet-5 \
   --fallback openai/gpt-5.6-luna \
   --verify openai/gpt-4o-mini
-# --yes (-y) auto-approves mutations and out-of-tree reads; without it a headless run is
+# --yes (-y) auto-approves ordinary mutations; plain out-of-tree reads also need
+# --permission-mode acceptEdits or bypass (or --add-dir); without --yes a headless run is
 # read-only inside the working directory and the model is told to report instead
 # --verify judges the agent's report against the uncommitted diff of the working tree (never
 # the transcript) and answers a structured verdict: PASS (high) — … / FAIL (medium) — unmet: …
@@ -293,10 +353,15 @@ arnes evals prune --older-than 30            # rows older than 30 days
 arnes evals prune --suite panel              # one suite
 arnes evals prune --label s6-out             # one A/B arm
 arnes evals prune --all
-``` For the industry benchmark,
-`benchmarks/terminal-bench/` has a [Harbor](https://www.harborframework.com) adapter to run
-Arnes on [Terminal-Bench](https://www.tbench.ai) — the same harness used to score Claude
-Code and Codex CLI — with `ARNES_MODEL` selecting the model per run.
+```
+
+For external evaluation, [benchmarks/terminal-bench/](benchmarks/terminal-bench/README.md)
+has a [Harbor](https://www.harborframework.com) adapter to run Arnes on
+[Terminal-Bench](https://www.tbench.ai), with `ARNES_MODEL` selecting the model per run.
+The adapter is infrastructure, not a published benchmark score. The recorded
+[A/B results](evals/ab/README.md) cover specific prompts, models, and small task suites;
+they do not establish performance relative to another coding agent.
+Costs and results shown in CLI examples are illustrative.
 
 ## Code review
 
@@ -466,17 +531,21 @@ The model drives tools; the user holds the gates.
   (a panel only after a `--verify` FAIL; refused with `--panel`, `--no-apply`, `--safe`,
   `--add-dir`, a resumed session or the lead-shape flags). `arnes eval` keeps
   auto-approving — every trial lives in a throwaway temp directory.
-- **`--yes` means "don't ask about the task", not "do anything".** It auto-approves
-  ordinary work *inside* the working directory. A `read_file`/`write_file`/`edit_file`/
-  `grep`/`glob` call on a path outside it — or on a credential, shell-startup or protected
-  path — stays denied, with the reason pointing at the fix: **`--add-dir <path>`**
-  (repeatable, on `arnes do` and the REPL) makes another directory count as inside, so
-  widening a run is something you type rather than something `--yes` implies.
+- **`--yes` auto-approves ordinary work inside the project.** It does not grant
+  out-of-tree file writes or bypass credential restrictions, configured read denials,
+  or the OS sandbox. Add `--permission-mode acceptEdits` or `bypass` to allow reads gated
+  only by location; `--yes` alone leaves those reads denied. In the REPL, choosing "always"
+  for such a read grants its enclosing directory for the session, shared with subagents.
+  A tainted session closes these automatic
+  read approvals. **`--add-dir <path>`** (repeatable, on `arnes do` and the REPL) explicitly
+  includes another directory for both reads and writes and extends the sandbox's write roots.
 - **The harness's own files are never tool-writable.** `write_file`/`edit_file` refuse
   anything under `~/.arnes/` (and whatever `ARNES_CONFIG`/`ARNES_HOOKS_CONFIG`/
   `ARNES_MCP_CONFIG`/`ARNES_RULES_CONFIG` point at) inside the tool itself, before any
   permission decision — so no mode, rule, hook or `--yes` lets an agent rewrite the
-  guardrails it runs under. Edit them yourself.
+  guardrails it runs under. Edit those settings yourself. The exception is the project's own
+  memory directory under `~/.arnes/memory/`: the agent can edit its notes there with a
+  sensitive permission prompt; `--yes` alone does not approve it.
 - **You can add your own touchy paths.** A top-level `"paths"` block in
   `~/.arnes/config.json` extends the built-in classification (it can only tighten):
   `{"paths": {"protected": ["deploy/**"], "sensitiveWrite": ["~/Library/LaunchDaemons/**"],
@@ -651,7 +720,9 @@ ln -s "$(pwd)/.claude/skills/arnes" ~/.claude/skills/arnes
   (user-overridable at `~/.arnes/packs/<family>.md`; a `## Delegation` section there replaces
   the built-in when-to-delegate guidance, which rides the prompt only while subagents are
   available; a `base.md` beside them replaces the base prompt itself, and `ARNES_PACKS_DIR`
-  points a run at another packs directory — the seam an A/B runs a variant through), ten built-in tools — eleven with a configured `web_fetch` — plus any MCP server's
+  points a run at another packs directory — the seam an A/B runs a variant through), file,
+  shell, planning, question, and background-job tools, plus capability-gated tools,
+  skills, subagents, and any MCP server's tools
   (`~/.arnes/mcp.json`), session transcripts (`~/.arnes/sessions/`), and the `RunRecord`
   eval substrate (`~/.arnes/runs.jsonl`). `edit_file` edits one file in several places in one
   call — an `edits` array of `{old_string, new_string, replace_all?}` applied in order and
@@ -661,8 +732,9 @@ ln -s "$(pwd)/.claude/skills/arnes" ~/.claude/skills/arnes
   the prompt, serialized with permission prompts and capped at three per turn; headless runs
   (`arnes do`, panels, evals) answer "no user is present" and the model is told to pick the most
   reasonable option and state the assumption. Subagents never have it.
-- **Tools the model is offered depend on the model** (`CapabilityGatedTool`, decided once per
-  request from the manifest): `view_image` lets a vision model *look at* a screenshot, diagram or
+- **Tools the model is offered depend on the model** (`CapabilityGatedTool`, with a stable
+  tool list between turn-boundary changes such as `/model` and `/effort`): `view_image` lets a
+  vision model *look at* a screenshot, diagram or
   mockup (PNG/JPEG/GIF/WEBP ≤ 5 MB; the image rides the conversation as content, the transcript
   keeps a `[image attached: …]` sentinel; path-gated like `read_file`) and is simply absent for a
   model whose manifest doesn't list `image` among its input modalities — an unknown model
@@ -678,7 +750,7 @@ ln -s "$(pwd)/.claude/skills/arnes" ~/.claude/skills/arnes
   entirely under a `network: false` sandbox.
 - **`arnes`** (CLI): `interactive` (default) · `chat` · `do` · `resume` · `models` · `status`
   · `providers` · `runs` · `sessions` · `eval` · `evals` · `probe` · `mcp` · `skills` · `agents`
-  · `hooks` · `trust` · `doctor` · `debug` · `review`.
+  · `hooks` · `trust` · `doctor` · `debug` · `review` · `memory` · `init`.
 - Built on [OpenRouterSwift](https://github.com/jamesrochabrun/OpenRouterSwift) — usage cost
   tracked per request, model fallbacks on every call.
 - **Routing visibility**: every response reports the model that actually served it
@@ -765,39 +837,43 @@ ln -s "$(pwd)/.claude/skills/arnes" ~/.claude/skills/arnes
   REPL also re-reads the project's `MEMORY.md` at every turn start, so a note the model saves
   reaches the next turn's system prompt.
 
-## Status
+## Current scope and limitations
 
-v0.4 — eval lifecycle tooling (`arnes evals` history/capture/prune, `capture --split`
-session slicing), on top of v0.3's dialect-native execution (`/messages`, `/responses`,
-per-model auto + `--dialect`), `--panel N` (parallel candidates, judge, labeled eval rows),
-eval framework (`arnes eval`, bash checks as ground truth), and CI (macOS + Linux) with
-static Linux release binaries and a Terminal-Bench/Harbor adapter — all over v0.2's
-interactive REPL (permission gating, mid-session `/model` swap, persistence + resume,
-coding tools, context compaction) and the v0.1 loop (inline verification, run records).
+The v0.7.0 source includes the interactive and headless workflows documented above,
+native dialects, cached model manifests, subagents, MCP, hooks, memory, checkpoints,
+evaluation tooling, and panel escalation after failed verification. These features are
+on `main`; the release distinction is documented at the top of this README.
 
-Unreleased since v0.4.1 (on `feat/p1-hardening`): a large harness-parity effort against the
-Claude Code and Codex playbooks — MCP servers (stdio + streamable HTTP), the two orthogonal
-safety axes (an OS sandbox crossed with a permission policy: path gates, a catastrophic-bash
-floor, rules + modes, an audit trail, env scrubbing, an optional command judge), subagents
-(a `task` tool = nested `Session` with lineage, parallel + background delegation, snapshot/fork
-isolation, persisted transcripts + resume), the canonical primitives (project instructions,
-`update_plan`/`think`/`ask_user`, the `# Environment` block, structured output, skills v2,
-tool-loop hygiene), lifecycle hooks at every point, dialect-native transport with the reasoning
-round-trip, the headless run contract (`RunResult`, `--output-format`, exit codes) with parity
-flags on `do`, `--json` on every listing, `arnes doctor` / `debug prompt` / `review`, eval
-graders (rubric/limits/verifier) and CI gates (`--parallel`, `--min-pass`, `--compare`,
-pass@k), untrusted-content framing/redaction/taint, file checkpoints (`/rewind`, `/diff`), and
-auto-memory (`~/.arnes/memory/<project>/MEMORY.md` as a `# Memory` section, edited through the
-file tools across a narrow carve-out of the `~/.arnes` floor; `arnes memory`, `/memory`).
-the REPL's dials and introspection (`/context`, a richer `/status`, `/btw`, `/effort`, `/thinking`,
-`/budget`, the plan pinned as it updates), context-budget microcompaction (a request carries a
-*view* of the conversation with old tool results stubbed, the persisted history untouched — with
-mid-turn relief and `/compact` steering), prompt-cache discipline (`cache_control` breakpoints on
-the Anthropic-family stable prefix with a cached-token metric on every dialect), transport
-resilience (jittered retries of a request that failed before any output token, a stream idle
-timeout, and the output-limit cutoff handled), bash v2 (`timeout_seconds`, a process-tree kill,
-`background: true` jobs behind a `job` tool that die with their session), and capability-gated
-tools (`view_image` for vision models, `web_fetch` under `URLPolicy.strict`, model-adaptive `think`
-omission), then panel policy triggers (`--panel-on-fail`) and cached model profiles. Next:
-scoreboard-driven routing defaults, gated pack-improvement proposals, a Linux sandbox backend. The full record is the `## Status` list
-in [INSTRUCTIONS.md](INSTRUCTIONS.md); the roadmap is in [DESIGN.md](DESIGN.md).
+- **Platforms:** CLI binaries target macOS and Linux on arm64/x64. OS sandbox enforcement
+  is implemented on macOS; a Linux backend remains planned. Windows binaries are not provided.
+- **Interfaces:** a terminal CLI and an embeddable Swift library. There is no bundled
+  desktop/web client, editor extension, ACP server, or built-in LSP integration.
+- **Recovery:** checkpoints cover `write_file` and `edit_file`, not shell edits or commits.
+- **Panels:** explicit panels and verifier-triggered escalation use isolated snapshots.
+  `--panel-on-fail` currently requires text output and does not support resumed sessions
+  or the lead-shape options; it has no combined JSON result envelope.
+- **Routing:** the provider chooses routes for aliases such as `openrouter/auto`.
+  Arnes records outcomes, but does not yet select models automatically from its scoreboard.
+- **Prompt improvement:** labeled A/B evaluations and override packs exist today.
+  Automatic pack-proposal generation is planned; prompt changes remain human-reviewed.
+
+See [DESIGN.md](DESIGN.md) for the architecture and remaining work, and
+[INSTRUCTIONS.md](INSTRUCTIONS.md#status) for the implementation history.
+
+## Contributing
+
+Read [AGENTS.md](AGENTS.md) for the standing rules and [DESIGN.md](DESIGN.md) for the
+architecture. Use the layout and relevant Status entry in [INSTRUCTIONS.md](INSTRUCTIONS.md)
+when working on an area; it is the detailed record rather than an onboarding guide.
+
+```bash
+swift build --product arnes
+swift test
+```
+
+Tests use mock services and temporary directories; they do not require model API calls.
+For a bug report, include `arnes --version`, OS/architecture, the command or workflow,
+expected versus actual behavior, and a minimal reproduction with credentials removed.
+Report problems or propose changes through [GitHub issues](https://github.com/jamesrochabrun/Arnes/issues).
+
+Arnes is available under the [MIT license](LICENSE).

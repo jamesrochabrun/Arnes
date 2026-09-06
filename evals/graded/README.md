@@ -1,4 +1,4 @@
-# evals/graded — the X4 graders on two small tasks
+# evals/graded — optional graders on three small tasks
 
 Run with `arnes eval evals/graded -m <model> --judge <cheap model> --verify <cheap model>`.
 `evals/basics` stays the ungraded A/B baseline; this suite exists to exercise the three
@@ -28,12 +28,12 @@ optional task keys, so the A/B runs are not disturbed by them.
 
 What a graded row adds to `~/.arnes/evals.jsonl`: `rubricScore`, `rubricPassed`,
 `rubricUnknown`, `rubricNotes`, `limitsPassed`, `limitsViolations`, `verifierPassed`,
-`graderCostUSD` (the judge's spend — apart from `costUSD`, so model comparisons stay fair;
-the verifier's spend is inside `costUSD` because the session books it with the turn),
+`graderCostUSD` (the rubric judge's and verifier's spend, apart from the agent's `costUSD`),
 `sessionId`/`runId`, tokens, `stopReason`, and `passed` (the graded verdict). A row without
 graders has none of them and aggregates exactly as before.
 
-Without `--judge` the rubric is graded by the candidate model itself and `arnes eval` warns
-`self-grading: judge == candidate` on stderr — fine for a smoke run, not for a comparison.
+The rubric model resolves from the task's `rubric.model`, then `--judge`, then the provider's
+default model, falling back to the candidate. When it resolves to the candidate, `arnes eval`
+warns `self-grading: judge == candidate` on stderr. Use a different judge for a comparison.
 Every trial's transcript lands under `~/.arnes/eval-sessions/`; read one with
 `arnes evals transcript <id>` (the row's `sessionId`, or its `runId` prefix).

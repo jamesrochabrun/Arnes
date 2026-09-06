@@ -1,19 +1,25 @@
 # Arnes — Design
 
-*Arnés* (Spanish: **harness**). A model-adaptive agent harness built on OpenRouter.
+*Arnés* (Spanish: **harness**). A model-adaptive coding agent and embeddable Swift library
+for OpenRouter, LiteLLM, and OpenAI-compatible providers.
+
+This document describes the v0.7.0 source on `main`. See the [README](README.md) for
+installation and the distinction between current source and published releases.
 
 ## Thesis
 
-Every major harness is tuned for one model family; swapping the model under it (Ori,
-claude-code-router) leaves the wrong prompts, wrong wire format, and wrong edit idioms in
-place. Arnes inverts this: **the model choice drives everything downstream** — wire dialect,
-prompt pack, request parameters, edit strategy.
+Model choice affects more than an API identifier: models differ in wire format, reasoning
+state, supported parameters, and how they use tools. Arnes makes those differences explicit
+through provider traits, model manifests, and family prompt packs. Other coding agents also
+adapt to multiple models; Arnes's focus is making that behavior inspectable and evaluating
+its quality and cost, while keeping the same loop embeddable without a UI.
 
 ## The four pillars
 
 1. **Dialect-native transport.** Speak each model's home format via OpenRouterSwift:
    `/messages` for Anthropic, `/responses` for OpenAI, `/chat/completions` for everyone else.
-   Never cross dialects, never lose reasoning state in translation.
+   Preserve each dialect's reasoning state across tool calls, with a chat fallback when a
+   native endpoint is unavailable before output starts.
    *Status: shipped. `Session` executes `/messages` and `/responses` natively (chosen per
    family, forced with `--dialect`), history stays chat-shaped and is translated per request,
    and reasoning state round-trips both ways — signed `thinking` blocks on `/messages`,
@@ -22,13 +28,16 @@ prompt pack, request parameters, edit strategy.
 
 2. **Runtime capability manifest.** `ModelProfile`/`ModelCatalog` read OpenRouter's live
    `GET /models` (supported parameters, context, pricing) — or a LiteLLM/OpenAI-compatible
-   provider's manifest — and shape every request from it. Nothing about a model is hardcoded.
+   provider's manifest — and shape requests from its capabilities, context limits, and prices.
+   Family-specific dialect and prompt preferences are defined separately.
    *Conformance is self-checking:* every clean native step records an ok verdict and a
-   pre-output native failure falls back to chat mid-turn and is remembered
-   (`~/.arnes/dialects.jsonl`, failures expire after 7 days); `arnes probe <model>` checks a
+   pre-output compatibility failure falls back to chat mid-turn and is remembered
+   (`~/.arnes/dialects.jsonl`; durable incompatibilities expire after 7 days,
+   transient verdicts after 15 minutes); `arnes probe <model>` checks a
    model explicitly with one echo-tool round-trip (and `--effort` also checks the reasoning
-   round-trip). Cached model profiles (the manifest is still fetched per process) are the
-   remaining piece.
+   round-trip). Profiles are cached per provider under `~/.arnes/models/` for 24 hours by
+   default; `arnes models --refresh` refetches them, an unknown model earns one refresh,
+   and a stale copy can serve during a fetch failure.
 
 3. **Prompt packs per family.** A family-independent core prompt plus per-family adapter
    markdown (`PromptPack`). User-overridable at `~/.arnes/packs/<family>.md` so tuning needs
@@ -39,10 +48,12 @@ prompt pack, request parameters, edit strategy.
    section replaces it). Orchestration prose is tuning: the same words damp a model that
    over-delegates and nudge one that never does, so it is not hardcoded in the tool.
 
-4. **Few tools, dumb schemas.** `read_file`, `write_file`, `edit_file`, `bash`, `grep`,
-   `glob`, `update_plan`, `think`, `ask_user`, plus `skill` and `task` (delegation) when
-   available and any MCP server's. Every extra tool or clever schema is where a non-frontier
-   model face-plants, so each addition has to be survivable by one.
+4. **Few tools, simple schemas.** File and shell tools, `update_plan`, `think`, `ask_user`,
+   and `job`, plus `skill`, `task`, and MCP tools when available. `view_image` requires
+   vision support; `web_fetch` requires configuration and a network-allowing sandbox posture.
+   With adaptive thinking enabled (the default), a reasoning-capable model with an active
+   effort dial is not offered `think`. Tool additions and prompt changes are evaluated on
+   smaller models as well as frontier models.
 
 ## The three evaluation loops
 
@@ -55,14 +66,15 @@ prompt pack, request parameters, edit strategy.
   `arnes do --verify X --yes --panel-on-fail N` (P2, batch 15; `policies.panelOnVerifierFail` for
   the default): a verifier FAIL re-runs the task as a panel over a snapshot of the tree as it was
   before the run, the winner is applied and re-verified, and the final verdict decides the exit code.
-- **Loop 3 — gated self-improvement (later):** the run-record scoreboard automatically tunes
-  *routing defaults* ("Swift refactors here: sonnet-5 wins at 1/3 cost") and flags
-  regressions. Prompt-pack changes are only ever **proposed** — a diff plus an A/B eval on a
-  frozen task set, merged by a human. No ungated self-modification (reward-hacking risk).
+- **Loop 3 — measured improvement (partly implemented):** labeled A/B runs, prompt-pack
+  overrides, eval-history comparisons, and regression gates exist today. Automatic
+  scoreboard-driven routing and automatic pack proposals remain planned. Pack changes
+  require a diff and an A/B evaluation on a frozen task set, merged by a human.
 
 **Shared substrate:** `RunRecord` (task, model, dialect, pack, steps, tool calls, cost from
-`usage.cost`, verifier verdict) appended to `~/.arnes/runs.jsonl` after every run. Loop 1
-populates it for free; loops 2–3 read it. `arnes runs` renders the scoreboard.
+`usage.cost`, verifier verdict) appended to `~/.arnes/runs.jsonl` after every run. Recording
+adds no model request; optional verification and judging do. `arnes runs` renders the
+scoreboard, and gateway costs are identified as estimates when the provider does not price responses.
 
 ## Router-native primitives used
 
@@ -79,7 +91,7 @@ cost is reported or must be estimated, whether native dialects exist — is isol
 URL-rewriting HTTP client. A LiteLLM *model group* plays the role `openrouter/auto`
 plays here: the gateway owns the routing policy, Arnes owns the harness.
 
-## The interactive layer (v0.2, shipped)
+## The interactive layer
 
 Arnes is a tool you live in, not just script. `arnes` with no arguments opens a REPL over a
 `Session` actor: client-side message history, streamed output, y/n/always permission gating
@@ -89,7 +101,8 @@ before mutating tools, Ctrl-C interruption, and crash-safe persistence to
 Because the history is fully client-side and OpenRouter is stateless, **`/model` swaps the
 entire conversation to any model mid-session** — 20 turns into Claude, type
 `/model openai/gpt-4o-mini` and the same conversation continues on GPT with full context.
-That one command is the identity of the tool: no single-vendor harness can offer it.
+Model switching reuses the saved conversation; content is adapted to the destination's
+capabilities, including removal of image parts when switching to a text-only model.
 `/cost` (live `usage.cost` totals), `/verify` (loop-1 on the last turn), `/save`, and a
 per-turn status line (requested → served model, steps, tools, turn + session cost) round out
 the router-native UX. Headless mode stays first-class: `arnes do` runs the same `Session`
@@ -107,139 +120,86 @@ ArnesKit  (library)   — Dialect, ModelProfile/ModelCatalog (+ fuzzy search), P
                         SessionStore/TranscriptEntry, RunRecord/RunRecordStore
 arnes     (executable) — interactive (default) · chat · do · resume · models · status ·
                         providers · runs · sessions · eval · evals · probe · mcp · skills ·
-                        agents · hooks · trust · doctor · debug · review
+                        agents · hooks · trust · doctor · debug · review · memory · init
 ```
 
 Depends on [OpenRouterSwift](https://github.com/jamesrochabrun/OpenRouterSwift) (API client;
 all three dialects already wrapped there). ArnesKit stays UI-free so native apps can embed it.
 
-## Harness primitives — evaluation vs. the Anthropic & Codex playbooks
+## Execution, context, and recovery
 
-Measured against Anthropic's agent guidance (*Building effective agents*, *Effective context
-engineering*, *Writing tools for agents*, the *think* tool, Claude Code) and OpenAI's Codex
-CLI, Arnes was already strong on the hard, differentiating parts — **model-adaptive dialects**,
-**prompt packs**, **an eval/scoreboard substrate**, **panels (parallelization + judge)**,
-**skills / subagents / MCP**, **compaction**, **session persistence**, and — uniquely — the
-**two orthogonal safety axes** both playbooks converge on: an OS **sandbox** (capability)
-crossed with a **permission policy** (interruption). What it lacked were the ordinary,
-canonical building blocks. Those are now in:
+The CLI and embedders use the same `Session` actor. It serializes conversation state and
+tool results while allowing independent tool work and nested sessions to run concurrently.
+Each subagent has its own history, run record, and optional transcript; inherited permissions,
+tools, budgets, and depth limits can narrow the parent's authority.
 
-| Primitive | Both ship it | Arnes |
-| --- | --- | --- |
-| Project instructions (AGENTS.md/CLAUDE.md → system prompt) | ✓ / ✓ | `ProjectInstructions`, trust-gated, precedence global→root→subdir; `.override`/`.local` variants, `@path` imports, `/init` |
-| Task checklist (TodoWrite / update_plan) | ✓ / ✓ | `update_plan`, stateless (full list each call) |
-| Reasoning scratchpad (the *think* tool) | Anthropic | `think`, no-op readOnly |
-| Token-efficient file reads (paging + cap) | ✓ / ✓ | `read_file` offset/limit + 2000-line cap |
-| Verify against ground truth | ✓ / ✓ | base-prompt gather→act→verify framing + `--verify` loop |
-| Budget stop (max cost) | ✓ / ✓ | `--budget` → `.budgetReached` |
+Permission policy and OS containment are separate layers. Interactive mutations normally ask;
+headless `do` is read-only unless `--yes`. The `acceptEdits` and `bypass` modes can approve
+plain out-of-tree reads, but cannot turn a credential or configured deny-read path into one.
+Unattended execution is sandboxed by default where supported (macOS). Linux binaries exist,
+but a requested Linux sandbox cannot currently be enforced. Tool-result framing, redaction,
+and taint handling add checks around untrusted content; they do not make arbitrary content safe.
 
-Each is a *dumb, readOnly-where-possible* tool or a bit of context plumbing — consistent with
-the invariant that a tool must be survivable by a non-frontier model, and none regress the
-default toolset (evals/basics holds 8/8 on DeepSeek with the additions).
+Context is managed at two levels. Microcompaction stubs older large tool results in the
+request's view of history while preserving the stored transcript. When more room is needed,
+automatic or manual compaction summarizes older turns with task state and file notes.
+System text and tool definitions remain stable between turn-boundary changes, and supported
+providers receive explicit prompt-cache breakpoints. Cached-token usage is recorded.
 
-**Shipped since** (see the `## Status` list in INSTRUCTIONS.md for the full record):
-- **Hooks — the whole lifecycle.** `~/.arnes/hooks.json` (and a trusted project's
-  `.arnes/hooks.json`, hash-gated) run at PreToolUse (block/ask/allow/rewrite before the prompt),
-  PostToolUse / PostToolUseFailure (output fed back), PermissionRequest, Stop (block→continue),
-  SubagentStart/SubagentStop, UserPromptSubmit, SessionStart/SessionEnd, PreCompact/PostCompact
-  and Notification, with `when`/`agent`/`enabled` matchers, a `type: prompt` in-model variant and
-  an in-process `HookHandler`, all on Claude Code's stdin-JSON + exit-code contract; `arnes hooks
-  test` dry-runs them.
-- **Reasoning-effort dial** — `--effort` maps to `reasoning.effort` or a thinking budget, gated on
-  the manifest's reasoning support, and the reasoning it produces round-trips (pillar 1).
-- **The canonical primitives** a Claude Code / Codex user expects: project instructions
-  (AGENTS.md/CLAUDE.md, trust-gated, `@imports`, `/init`), `update_plan`, `think`, `ask_user`,
-  the `# Environment` block, structured output (`--output-schema`), background subagents,
-  snapshot/fork isolation, skills preloading, subagent transcripts + resume, delegation guidance
-  in packs, tool-loop hygiene (one cap + spill + loop guard), the headless run contract
-  (`RunResult`, `--output-format`, exit codes), the introspection CLI (`--json` everywhere,
-  `arnes doctor`, `arnes debug prompt`), and `arnes review`.
-- **Prompt-cache discipline (C7) — the prefix stability rules.** Every step of a turn re-sends
-  the same system prompt and tool definitions, so the request is shaped to make that prefix
-  cacheable and the harness measures whether it was: (1) **static first** — pack, project
-  instructions, the `# Environment` and `# Memory` sections, the tool listings and the role
-  suffix are rendered from facts captured once per session, byte-identical request after request;
-  (2) **reminders ride user messages** — a notice, the loop guard's nudge, a hook's feedback, a
-  plan update land in the growing history, never in the system text; (3) **never a timestamp**
-  finer than the date — a clock in the prefix would miss the cache every minute; (4) **the tool
-  list is fixed per session** — the same definitions in the same order; (5) **the prefix moves
-  only at a turn boundary** — a compaction, `/model`, `/effort`, `/permissions` — and a cheaper
-  model belongs in a subagent, not in a `/model` swap on a hot cache. On the Anthropic family
-  (where the provider takes the field) the requests mark the prefix with `cache_control`
-  breakpoints — the system text and the last message on chat, the last tool and the last block on
-  `/messages` — and every dialect reports what it read from a cache (`RunRecord.cachedTokens`, the
-  footer's `cache N%`, the scoreboard's `cache=` column). `PrefixStabilityTests` audits the rules
-  against the real prompt.
+Before `write_file` or `edit_file`, the harness checkpoints the pre-image. `/rewind` can
+restore files and/or conversation history; `/undo` restores the last turn's checkpointed
+files. Shell edits and commits are not covered. File-version checks refuse edits based on
+unread or stale contents, and an `edits` array changes one file atomically.
 
-**Deliberately deferred**, with rationale:
-- **Background *shell* jobs** (`run_in_background`) — background *subagents* shipped (A4); a
-  detached-bash `job` registry is the remaining half (T2), deferred until a long-running-command
-  need lands.
-- **Structured note-taking** (auto-memory) — compaction covers the conversational case;
-  agent-managed notes under `~/.arnes/memory` are the iterative-milestone complement (C3),
-  achievable today via `write_file` + convention before earning a dedicated store.
-- **apply_patch** (Codex's multi-file envelope) — a deliberate *non*-adoption: `edit_file`
-  (unique-match) + `write_file` already cover multi-file edits without a bespoke patch grammar.
-- **A Linux OS-sandbox backend** — the macOS `sandbox-exec` profile ships; bubblewrap/Landlock
-  is the Linux equivalent still to wire.
+Background shell commands belong to a session's job registry and are read or stopped through
+`job`. Subprocesses have closed stdin, bounded output, timeouts, environment filtering, and
+process-tree cancellation. Per-project memory is a capped, scanned `MEMORY.md` section;
+writes through the file tools require sensitive approval.
 
-Shipped that this list once deferred: session fork (`/fork`, `arnes resume --fork`), the
-reasoning-effort dial, and interactive plan mode (`/plan`, `--permission-mode plan`).
+## Integration boundaries
 
-## Roadmap
+- **Library:** `ArnesKit` exposes sessions, tools, events, configuration, evaluation, and
+  storage without a UI dependency. Services and permission/input delegates are injectable.
+- **CLI:** interactive sessions and headless `do` share the loop. JSON result envelopes and
+  event streams support scripts; `--output-schema` optionally validates the final answer.
+- **Extensions:** skills, scoped project instructions, lifecycle hooks, MCP tools/resources/
+  prompts, and configured subagents. Panels deliberately omit MCP to keep candidates isolated.
+- **Provider client:** typed API fields belong in OpenRouterSwift. URL rewriting and
+  `ProviderTraits` supply gateway-specific behavior in Arnes.
+- **Current interfaces:** terminal CLI and Swift library. Desktop/web clients, editor
+  extensions, ACP, and built-in LSP support are not implemented.
 
-- **v0.1 (shipped):** chat-dialect agent loop, 3 tools, prompt packs, run records, `--verify`,
-  scoreboard command.
-- **v0.2 (shipped):** interactive core — `Session`, REPL, permission gating, streaming,
-  `/model` mid-session swap, session persistence/resume; coding tools (`edit_file`,
-  `grep`, `glob`).
-- **v0.3 (shipped):**
-  - *Context compaction:* `usage.promptTokens` vs `profile.contextLength` drives an
-    auto-trigger at ~80% (plus manual `/compact [model]`): everything before the last user
-    turn is summarized (router picks the summarizer by default), the summary rides the
-    system prompt, and a `compaction` transcript entry makes it survive resume. The status
-    line shows live context usage (`ctx N%`). OpenRouter's server-side `context-compression`
-    plugin remains the alternative to evaluate.
-  - *Dialect-native execution* for Anthropic (`/messages`) and OpenAI (`/responses`) under
-    `Session`, with the optimistic conformance probe (clean native steps record ok verdicts,
-    pre-output failures fall back to chat and are remembered); `--panel N` with snapshot
-    isolation and a judge model.
-- **v0.4 (shipped):** eval lifecycle tooling — `arnes evals` (history bars per suite ×
-  model × dialect), `evals capture` (writer model distills sessions or descriptions into
-  validated tasks; `--split` slices a session into a dataset), `evals prune`; MCP tool provider
-  (stdio + streamable-HTTP), REPL polish (`arnes resume`, streaming markdown, the pinned input
-  bar, type-ahead queueing), the anti-stall loop.
-- **Since v0.4 (unreleased, on `feat/p1-hardening`):** a large harness-parity effort against the
-  Claude Code and Codex playbooks, in waves — the full record is the `## Status` list in
-  INSTRUCTIONS.md. In brief:
-  - *Safety:* two orthogonal axes — an OS **sandbox** (macOS `sandbox-exec`, confinement) crossed
-    with a **permission policy** (`PathScope` write/read gates, a catastrophic-bash floor, rules +
-    modes, session grants, an audit trail, a read-only floor, env scrubbing, an optional cheap-model
-    command judge).
-  - *Subagents:* a `task` tool = nested `Session` (own `RunRecord`, lineage, fresh history,
-    inherited-and-narrowed delegate + toolset), parallel delegation, background runs, snapshot/fork
-    isolation, `maxDepth`, persisted transcripts + resume, delegation guidance in packs.
-  - *Tools & context:* project instructions, `update_plan`/`think`/`ask_user`, the `# Environment`
-    block, tool-loop hygiene (one cap + spill + loop guard), structured output, skills v2.
-  - *Headless & introspection:* the `RunResult` contract + `--output-format` + exit codes, headless
-    parity flags on `do`, `--json` on every listing, `arnes doctor`, `arnes debug prompt`,
-    `arnes review`, eval graders (rubric/limits/verifier).
-  - *Dialects:* native `/messages` + `/responses`, the conformance probe, and the reasoning
-    round-trip (pillar 1).
-  - *Context & cost:* eval CI gates + parallelism, verifier v2 (diff-aware, schema verdict),
-    file checkpoints + `/rewind`, untrusted-content framing/redaction/taint, the REPL dials +
-    introspection (`/context`, `/btw`, `/effort`, `/budget`, `/thinking`), context-budget
-    microcompaction (a request-time history *view* — old tool results stubbed, the persisted
-    history untouched — with mid-turn relief and compaction steering), prompt-cache discipline
-    (`cache_control` breakpoints on the Anthropic-family stable prefix with a cached-token metric
-    on every dialect), transport resilience (jittered retries before any output token, a stream
-    idle timeout, output-limit truncation handling), auto-memory (`~/.arnes/memory/<project>/`
-    through a narrow carve-out of the `~/.arnes` floor).
-  - *Tools:* bash v2 (`timeout_seconds`, a process-tree kill, background jobs behind a `job`
-    tool), and capability-gated tools — `view_image` for vision models (manifest-gated, the image
-    delivered as a content part), `web_fetch` under `URLPolicy.strict` with a `.sensitive` floor,
-    model-adaptive `think` omission.
-- **The harness-parity effort is complete on `feat/p1-hardening`** (47 items over eleven batches;
-  the `## Status` list in INSTRUCTIONS.md is the full record). **Next / further out:** panel
-  policy triggers (auto-panel after verifier rejections), cached model profiles,
-  scoreboard-driven routing defaults, gated pack-improvement proposals, a Linux sandbox backend.
+## Evaluation and evidence
+
+`arnes eval` runs models × tasks × trials in isolated directories. Task check scripts provide
+ground truth; rubric and limit graders may further restrict a pass. Optional verifier
+judgments are recorded separately. Rubric and eval-verifier spend is recorded in
+`graderCostUSD`, apart from the agent's `costUSD`.
+
+The [A/B record](evals/ab/README.md) includes successful changes and proposals that were
+not adopted. Adaptive thinking is on by default following the September 3 experiment.
+The wider delegation prompt was not adopted: the September 4 follow-up obtained 16 correct
+answers with no delegations, showing that those search tasks could be solved by the lead.
+A delegation count is not itself a measure of better coding.
+
+The [Terminal-Bench adapter](benchmarks/terminal-bench/README.md) enables external evaluation;
+it is not a published score. Existing small-suite results do not establish superiority to
+another harness. Comparisons need matched model/provider versions, tasks, environments,
+budgets, and repeated trials, with correctness and total cost reported together.
+
+## Remaining work
+
+- **Linux OS containment:** a bwrap/Landlock backend; macOS enforcement is implemented.
+- **Scoreboard-driven routing:** use recorded outcomes to propose or select routing defaults.
+  Today routing belongs to the provider or explicit user model choices.
+- **Automated pack proposals:** generate a reviewable diff and A/B evidence. The override,
+  labeling, and evaluation mechanisms already exist; changes still require human review.
+- **Panel result integration:** verifier-triggered escalation currently has text output only,
+  with no combined JSON envelope or resumed-session support.
+
+The separate `apply_patch` tool is deliberately not implemented: `edit_file` (including
+multiple replacements in one file) and `write_file` are the current editing interface.
+
+Implementation history, completed milestones, and per-file details live in
+[INSTRUCTIONS.md](INSTRUCTIONS.md#status). Current usage and release availability live in
+[README.md](README.md).

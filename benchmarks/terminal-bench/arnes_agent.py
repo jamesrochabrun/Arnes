@@ -3,11 +3,11 @@
 Usage:
     pip install harbor
     export OPENROUTER_API_KEY=sk-or-...
-    harbor run -d terminal-bench@2.0 --agent benchmarks.terminal_bench.arnes_agent:ArnesAgent
+    PYTHONPATH=benchmarks/terminal-bench harbor run -d terminal-bench@2.0 --agent arnes_agent:ArnesAgent
 
-The adapter installs Swift + builds arnes inside the task container, or uses a
-prebuilt Linux binary when ARNES_LINUX_BINARY_URL is set (much faster). Pick the
-model with ARNES_MODEL (default: openrouter/auto).
+The adapter downloads the latest published Linux binary by default, or the URL in
+ARNES_LINUX_BINARY_URL. A source build is the fallback when the default download
+fails. Pick the model with ARNES_MODEL (default: openrouter/auto).
 """
 
 import json

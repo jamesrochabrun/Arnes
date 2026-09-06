@@ -1,9 +1,14 @@
-# evals/ab — the invariant-6 A/B recipe for the three pending prompt-pack proposals
+# evals/ab — prompt-pack experiments and recorded decisions
 
-Three prompt-pack proposals have waited on an eval A/B since batches 6, 9 and 11, because the
-A/B could not be run. P1 built the switches, the variant files and a probe task; **it flipped no
-default and changed no pack sentence**. This file is the recipe you run on the gateway, and the
-decision rules that turn its numbers into a merge or a "recorded, kept off".
+This file keeps the recipes, decision rules, and dated results for three prompt/tool
+experiments. As of September 5, 2026, adaptive thinking is enabled by default, the base
+prompt no longer asks for the think tool, the S6 tool-result sentence remains, and the wider
+delegation override has not been adopted. The Results sections below explain each decision;
+historical commands and measurements describe the arms at the time they were run.
+
+These are targeted experiments on small suites, not comparative coding-agent benchmarks.
+Live runs are an explicit human step: they spend model credits and append to the real
+Arnes stores. Unit tests use injected temporary stores instead.
 
 ## The switches
 

@@ -57,6 +57,15 @@ library, UI-free) and `arnes` (CLI).
 
 ## Layout
 
+Documentation:
+
+- `README.md` — current-source CLI usage, quick start, release availability, limitations,
+  and contributor entry point; `npm/arnes/README.md` — the packaged CLI introduction.
+- `DESIGN.md` — current architecture, evidence, and remaining work; this file's Status
+  section keeps the implementation history.
+- `evals/*/README.md` — suite contracts and recorded experiments;
+  `benchmarks/terminal-bench/README.md` — the external adapter and reproducibility notes.
+
 ```
 Sources/ArnesKit/
   Dialect.swift            # ModelFamily → preferred wire dialect
@@ -186,7 +195,10 @@ contract agents rely on. Users symlink it to `~/.claude/skills/arnes` for global
   (`installed arnes 0.7.0 · <sha>[+local-changes] · <time> → <path>`). Run it after any CLI/Kit
   change the user will try interactively, and quote the receipt so "is my binary current?" is
   answered by the line, not by faith.
-- Live smoke: `OPENROUTER_API_KEY=... .build/debug/arnes chat "hi" -m anthropic/claude-haiku-4.5`,
+- **Live smoke is a human step, never a test or unattended-agent action.** Live commands
+  write to the real `~/.arnes`; `NSHomeDirectory()` ignores a substituted `HOME`. Tests
+  inject temporary stores. Human smoke examples:
+  `OPENROUTER_API_KEY=... .build/debug/arnes chat "hi" -m anthropic/claude-haiku-4.5`,
   then `arnes do "create /tmp/x.txt containing hello" --verify openai/gpt-4o-mini`,
   then `arnes runs`.
 - Gateway smoke (no network): point a `litellm` provider at a local fake (`/model/info`,
@@ -5811,5 +5823,16 @@ Bun installs work). `scripts/npm-release.sh` generates the publishable dirs; aut
       is now what ships, so the workaround is gone and every toolchain reads the same 15 KB standing
       file (`ProjectInstructions` already resolved `AGENTS.md` first; only a `CLAUDE.md`-only reader
       followed the symlink here). The history stays in this file, read on demand.
+- [x] Documentation aligned with v0.7.0 source (2026-09-05) — root and npm READMEs now
+      introduce the coding workflows, distinguish current source from the published v0.6.0
+      release, and provide onboarding and contributor guidance. DESIGN.md describes the
+      implemented architecture and remaining work without obsolete branch milestones or
+      unsupported competitive claims. Corrected the README command/tool inventory, permission
+      mode guidance, memory exception, and benchmark fence; updated grader accounting,
+      delegation-probe interpretation, A/B status, and the Harbor adapter's documented import
+      path and release selection. Verified CLI help, prompt rendering with a placeholder
+      provider and caching disabled, Markdown fences and relative links, slash-command
+      uniqueness, and `git diff --check`. Runtime behavior and prompt packs are unchanged;
+      no live model evaluations or release publication were performed.
 - [ ] OS sandbox: Linux backend (bwrap/landlock); macOS shipped.
 - [ ] Scoreboard-driven routing defaults; gated pack proposals
