@@ -12,9 +12,9 @@ or approval to promote experimental defaults. See [the implementation ledger](..
 | Model-adaptive prompts and tool descriptions | [ToolGuidanceTests](../Tests/ArnesKitTests/ToolGuidanceTests.swift) exercises actual Chat, Messages and Responses requests, forced Chat, model/family switching, capability gating, unchanged schemas and stable per-turn overrides. [PrefixStabilityTests](../Tests/ArnesKitTests/PrefixStabilityTests.swift) covers deferred effort/system-section changes and rejected active-turn model swaps | Real provider acceptance and independently measured benefit for each opt-in family proposal |
 | Editing recovery | [EditRecoveryTests](../Tests/ArnesKitTests/EditRecoveryTests.swift) runs failed exact edit → reread → successful exact edit through Session over a real CRLF file, with error accounting and proof the failed edit wrote nothing. Location hints do not expose extra contents. Existing stale-read/checkpoint tests remain in the full suite | Whether the guidance reduces retries on development and held-out tasks |
 | Long-task context | [TokenRetentionTests](../Tests/ArnesKitTests/TokenRetentionTests.swift) and [CommandEvidenceTests](../Tests/ArnesKitTests/CommandEvidenceTests.swift): optional estimated-token retention, bounded paired command evidence, clearing without deleting stored history, compaction and resume | Whether a real summarizer preserves objectives, constraints, edits and verification evidence; the integration test deliberately scripts its summary |
-| Terminal reliability | [TerminalRecoveryTests](../Tests/ArnesKitTests/TerminalRecoveryTests.swift): real timeout/recovery, large failure tails, cancelled waits and registry restart. ACP tests cover concurrent MCP stop/restart with stubborn descendants; specialist tests combine cancellation, snapshots and background jobs while preserving a parent's live registry | Mac and Linux arm64 subprocess checks pass; installer behavior is untested. Mac sandbox enforcement passes |
+| Terminal reliability | [TerminalRecoveryTests](../Tests/ArnesKitTests/TerminalRecoveryTests.swift): real timeout/recovery, large failure tails, cancelled waits and registry restart. ACP tests cover concurrent MCP stop/restart with stubborn descendants; specialist tests combine cancellation, snapshots and background jobs while preserving a parent's live registry | Mac, Linux arm64 and Linux x86_64 subprocess checks pass; installer behavior is untested. Mac sandbox enforcement passes |
 | Executable diagnostics | [CommandDiagnosticsTests](../Tests/ArnesKitTests/CommandDiagnosticsTests.swift): bounded extraction from observed foreground bash output, no extra execution, denial/taint/redaction coverage, eval/panel propagation and inherited configuration | Completion/cost effect on real tasks; parsed command status is not a task verdict |
-| ACP | [ACPTests](../Tests/ArnesKitTests/ACPTests.swift): protocol progress, approval/denial, cancellation before file execution, bounded pipe backpressure, joined shutdown and durable records. [Executable client](../scripts/test-acp.py): all 11 transport/HTTP cases pass on Mac and Linux arm64 | SwiftOpenAI 4.6.1 is resolved without an override. Real editor UI and provider compatibility remain separate checks |
+| ACP | [ACPTests](../Tests/ArnesKitTests/ACPTests.swift): protocol progress, approval/denial, cancellation before file execution, bounded pipe backpressure, joined shutdown and durable records. [Executable client](../scripts/test-acp.py): all 11 transport/HTTP cases pass on Mac, Linux arm64 and Linux x86_64 | SwiftOpenAI 4.6.1 is resolved without an override. Real editor UI and provider compatibility remain separate checks |
 | Bounded specialists | [SpecialistProposalTests](../Tests/ArnesKitTests/SpecialistProposalTests.swift): constrained tools/permissions, snapshot cancellation and job cleanup, remaining-budget checks at spawn and after queuing, parent-tree preservation. [ParallelTasksTests](../Tests/ArnesKitTests/ParallelTasksTests.swift) verifies cancelled waiters do not hold or steal slots. Existing nested budget/permission tests remain in the full suite | Whether delegation improves independent correctness after child cost and duplicate work. Budgets check observed usage; concurrent in-flight work can overshoot, with no reservation ledger |
 
 All optional guidance/diagnostics/context/role treatments remain opt-in. A patch-editing
@@ -51,6 +51,26 @@ The released lockfile SHA-256 is
 
 ### Hosted CI after the main integration
 
+The [final hosted run](https://github.com/jamesrochabrun/Arnes/actions/runs/34191883299)
+at `e4015a8e2dfda8c2989064bb21e1230a78897a6d` passes **all five jobs**, using the released
+SwiftOpenAI 4.6.1 checkout with no override:
+
+| Final hosted gate | Exact result |
+| --- | --- |
+| Mac full Swift suite | 1,891 tests, one expected skip, zero failures; 196.648 seconds, Swift 6.2.4 |
+| Mac actual executable ACP | 11/11; 4.980 seconds |
+| Mac offline benchmark adapter | 22/22; 0.086 seconds |
+| Linux x86_64 full Swift suite | 1,899 tests, ten expected platform skips, zero failures; 142.770 seconds |
+| Linux x86_64 actual executable ACP | 11/11; 4.508 seconds |
+| Linux x86_64 offline benchmark adapter | 22/22; 0.043 seconds |
+| Universal Mac release | arm64 and x86_64 build passes |
+| Linux static Swift release | Build passes; 401.78 seconds |
+| npm packaging | Stub packaging and launcher argument/exit forwarding pass; no installation or publication |
+
+The final receipts are `ci-followup.json` and `ci-followup-*.log` in the ignored release
+evidence directory. The subsequent documentation-only commit changes no runtime, tests,
+dependency lock or CI configuration from this green commit.
+
 The [first hosted run](https://github.com/jamesrochabrun/Arnes/actions/runs/34190895908)
 at `b58368380ea18cca367845d384d5566571cfa23a` established these additional results:
 
@@ -73,8 +93,8 @@ These changes do not alter runtime permissions, sandbox behavior or subprocess s
 
 Local follow-up: **37/37 focused Swift tests** (4.793 seconds), and **11/11 executable ACP
 cases** (4.227 seconds) with `socket.getfqdn` replaced by a function that fails any call.
-The subsequent hosted run validates the fixture corrections; the first run above is
-retained as historical evidence, not represented as a passing full workflow. Hosted logs
+The final hosted run above validates the fixture corrections and passes all five jobs.
+The first run is retained as historical evidence, not represented as a passing workflow. Hosted logs
 are retained with the release evidence as `ci-*.log`, alongside `ci-fixture-focused.log`
 and `acp-without-dns.log`.
 
@@ -263,10 +283,11 @@ The continuation used a new isolated VM with the same toolchain image.
 ## Automated integration gates and reproduction
 
 The required local Mac and Linux arm64 build, full-suite and executable gates **pass** with
-SwiftOpenAI 4.6.1, whose source matches the tested PR commit. The local continuation did
-not execute Linux x86_64 Arnes or universal/static release artifacts; those are additional
-hosted CI jobs. Installer behavior and real provider/editor behavior remain separate checks.
-Hosted SwiftOpenAI CI is separate from Arnes CI.
+the correction released in SwiftOpenAI 4.6.1. All five hosted Arnes CI jobs also **pass**
+against that release, adding Linux x86_64 validation, universal/static release builds and
+npm packaging checks. Installer behavior, real editor/provider compatibility and measured
+model quality remain separate checks. Explicit sandbox-exec nesting is unsupported in
+this session; the repository's Mac sandbox enforcement tests pass without that extra nesting.
 
 ```bash
 swift build --product arnes --force-resolved-versions

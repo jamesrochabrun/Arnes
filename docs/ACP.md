@@ -99,8 +99,8 @@ The full suite uses a local HTTP provider fixture, isolated state and a minimal 
 environment. It exercises streamed prompts/tool progress, approval/denial and the harness
 floor, cancel/restart, background process-tree cleanup, disconnect, signals, session
 isolation and durable records. It keeps the normal platform sandbox policy. Mac and Linux
-CI is configured to run it without paid calls. All 11 executable cases pass on Mac and
-Linux arm64. Linux also passes the full Swift suite after the process-supervision fix;
+CI runs it without paid calls. All 11 executable cases pass on Mac and
+Linux arm64/x86_64; the hosted Mac and Linux x86_64 jobs pass against SwiftOpenAI 4.6.1. Linux also passes the full Swift suite after the process-supervision fix;
 Arnes uses SwiftOpenAI 4.6.1, which includes the dependency correction from PR #199, so a
 clean Linux build requires no dependency checkout edits.
 [VALIDATION.md](VALIDATION.md) records the exact evidence boundary. A real editor's UI

@@ -68,7 +68,7 @@ Documentation:
   `arnes_agent.py` integrates Harbor, `benchmark_contract.py` bounds host pack inputs and
   parses provenance/results, and adjacent Python tests exercise offline orchestration.
 - `ENHANCEMENTS.md` — agentic-quality implementation ledger and verification scope.
-- `docs/VALIDATION.md` — requirement-level evidence audit, verified Mac/Linux arm64 gates,
+- `docs/VALIDATION.md` — requirement-level evidence audit, verified Mac/Linux arm64/x86_64 gates,
   SwiftOpenAI 4.6.1 adoption, hosted CI/fixture receipts and prior PR results, plus editor and paired-model gates.
 - `Sources/CArnesProcess/` — Linux C target for posix_spawn, child descriptor
   closure and waitpid status decoding; glibc 2.34+, no additional external package.
@@ -6067,5 +6067,12 @@ Bun installs work). `scripts/npm-release.sh` generates the publishable dirs; aut
       mock binding. Startup diagnostics retain failure evidence. Local affected tests pass
       37/37; actual ACP passes 11/11 with reverse DNS forced to fail. Runtime behavior and
       permissions are unchanged; docs/VALIDATION.md records the initial CI result separately.
+- [x] Record green hosted validation (2026-09-07) — all five Arnes CI jobs pass at
+      e4015a8e2dfda8c2989064bb21e1230a78897a6d with released SwiftOpenAI 4.6.1:
+      Mac 1,891 tests (one expected skip), Linux x86_64 1,899 (ten platform skips), zero
+      failures; actual ACP 11/11 and benchmark 22/22 on each. Universal Mac, static Swift
+      Linux and npm packaging pass. Documentation records the exact run/times and keeps
+      installer, editor and live model-quality evaluations separate. This documentation-only
+      receipt changes no tested code, dependency or workflow.
 - [ ] OS sandbox: Linux backend (bwrap/landlock); macOS shipped.
 - [ ] Scoreboard-driven routing defaults; gated pack proposals

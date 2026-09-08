@@ -9,9 +9,9 @@ distribution. This is an implementation ledger, not a claim of benchmark perform
 | Model-adaptive guidance | Pack-driven tool guidance on every dialect, unchanged schemas/permissions, stable per-turn prefix, two opt-in experiment packs | Implemented; focused tests pass; live A/B pending |
 | Editing recovery | Actionable failed-match diagnostics; exact-match, stale-read, atomicity and checkpoint protections remain tested | Implemented; focused regressions pass |
 | Context retention | Token-budgeted recent context; preserve goals, constraints, changes and verification through compaction; long-task regression coverage | Optional token budget and recent command-evidence appendix implemented; mock multi-turn compaction/resume coverage; live quality evidence pending |
-| Terminal reliability | Exercise long jobs, bounded logs, cancellation and installation failures; document container isolation | Mac and Linux arm64 full suites and subprocess checks pass; Linux uses direct-child process supervision; installer validation pending |
+| Terminal reliability | Exercise long jobs, bounded logs, cancellation and installation failures; document container isolation | Mac and Linux arm64/x86_64 full suites and subprocess checks pass; Linux uses direct-child process supervision; installer validation pending |
 | Executable diagnostics | Structured, bounded test/typecheck/lint feedback using the existing subprocess and permission paths | Opt-in foreground bash extraction implemented; no extra execution or task verdict; live A/B pending |
-| ACP | Thin stdio protocol adapter over Session, initialization, sessions, streaming, cancellation, permission responses and run records; executable tests with isolated stores | All 11 executable transport/HTTP tests pass on Mac and Linux arm64 with the correction released in SwiftOpenAI 4.6.1; live editor validation pending |
+| ACP | Thin stdio protocol adapter over Session, initialization, sessions, streaming, cancellation, permission responses and run records; executable tests with isolated stores | All 11 executable transport/HTTP tests pass on Mac and Linux arm64/x86_64 with the correction released in SwiftOpenAI 4.6.1; live editor validation pending |
 | Specialized delegation | Opt-in bounded role guidance and behavioral probes; no forced delegation or expanded permissions | Explicit eval role sets and investigator/verifier proposal implemented; correctness probes and scope tests; live A/B pending |
 
 Prompt and tool-interface changes remain experiments until paired evaluations justify
@@ -24,10 +24,20 @@ Live model evaluations are a human-run step under this repository's standing rul
 Offline tests verify contracts and failure recovery, not model-quality improvements.
 The [validation audit](docs/VALIDATION.md) maps each requirement to direct evidence and
 describes the automated platform checks separately from human-run compatibility and
-quality evaluations. Required Mac and Linux arm64 build, full-suite and executable HTTP gates pass with
-the correction released in SwiftOpenAI 4.6.1; release artifacts and live quality checks remain separate. Experimental options stay opt-in pending measured benefit.
+quality evaluations. Required Mac and Linux arm64/x86_64 build, full-suite and executable
+HTTP gates pass with the correction released in SwiftOpenAI 4.6.1. All five hosted CI jobs
+pass, including universal/static builds and packaging. Actual installer and live quality
+checks remain separate. Experimental options stay opt-in pending measured benefit.
 
 ## Verification so far
+
+- Final hosted Arnes CI (2026-09-07): [all five jobs pass](https://github.com/jamesrochabrun/Arnes/actions/runs/34191883299)
+  at `e4015a8e2dfda8c2989064bb21e1230a78897a6d`, using released SwiftOpenAI 4.6.1.
+  Mac: **1,891 tests, one expected skip, zero failures**. Linux x86_64: **1,899 tests,
+  ten platform skips, zero failures**. Both executables pass **11/11 ACP** cases and both
+  adapters pass **22/22 offline tests**. Universal Mac, static Swift Linux and npm packaging
+  jobs pass. The initial Mac fixture failures, targeted corrections and exact final times
+  are recorded in [the audit](docs/VALIDATION.md). No live model quality claim is implied.
 
 - Release adoption (2026-09-07): SwiftOpenAI 4.6.1 is the merged correction from PR #199;
   its source tree is identical to the validated PR commit. Arnes now resolves the release
