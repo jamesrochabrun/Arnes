@@ -5,6 +5,18 @@ import ArnesKit
 /// T2 in the CLI: the `/tasks` jobs half, the between-turns exit line, the `job` tool in the
 /// runtime's toolset, and the `limits.bashTimeoutSeconds` default reaching `bash`.
 final class BackgroundJobsCLITests: XCTestCase {
+  func testKeepAliveIsBoundedAndRefusesInternalVerifierAndPanels() throws {
+    XCTAssertEqual(try Do.parse(["task"]).keepAlive, 0)
+    XCTAssertEqual(try Do.parse(["task", "--keep-alive", "600"]).keepAlive, 600)
+    for arguments in [
+      ["--keep-alive", "-1"], ["--keep-alive", "3601"],
+      ["--keep-alive", "600", "--verify", "test/model"],
+      ["--keep-alive", "600", "--panel", "2"],
+    ] {
+      XCTAssertThrowsError(try Do.parse(["task"] + arguments), arguments.joined(separator: " "))
+    }
+  }
+
   func testJobsListingNamesEachJobWithStateElapsedAndCommand() {
     let now = Date(timeIntervalSince1970: 1_000_000)
     let log = URL(fileURLWithPath: "/tmp/arnes-jobs-abc/job-1.log")

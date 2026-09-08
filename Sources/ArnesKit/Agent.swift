@@ -277,6 +277,28 @@ public final class Agent: @unchecked Sendable {
 
   private let sessionLock = NSLock()
   private var liveSession: Session?
+  private var completionTask: Task<[HookNotice], Never>?
+  private var closeRequested = false
+
+  /// Wait for an explicitly requested completion grace period and its session cleanup.
+  /// The turn's result and record are already final; no further agent steps run.
+  /// Configured SessionEnd hooks still run when the session closes.
+  public func waitForClose() async -> [HookNotice] {
+    guard let task = sessionLock.withLock({ completionTask }) else { return [] }
+    return await withTaskCancellationHandler {
+      await task.value
+    } onCancel: {
+      task.cancel()
+    }
+  }
+
+  /// End a completion grace period early. Cancellation wakes the timer and still runs
+  /// Session.end, including the normal managed-job cleanup and SessionEnd hooks.
+  public func close() async -> [HookNotice] {
+    guard let task = sessionLock.withLock({ completionTask }) else { return [] }
+    task.cancel()
+    return await task.value
+  }
 
   /// The session of the run in flight — or of the last run, once it ended. What
   /// `interrupt()` cancels, and where the `RunRecord` of a run that *threw* can still be
@@ -290,6 +312,10 @@ public final class Agent: @unchecked Sendable {
   /// `stopReason == .interrupted`, and `run` returns normally with that record. Safe to call
   /// from a signal handler or a deadline task; a no-op with nothing running.
   public func interrupt() {
+    sessionLock.withLock {
+      closeRequested = true
+      completionTask?.cancel()
+    }
     guard let session = lastSession else { return }
     Task { await session.interrupt() }
   }
@@ -376,6 +402,10 @@ public final class Agent: @unchecked Sendable {
   ///   (`arnes do --session-id`), so a pipeline can name the transcript it will resume; the
   ///   caller checks the store for a collision. Ignored when `resuming` — a resumed run keeps
   ///   its transcript's id.
+  /// - Parameter keepAliveSeconds: after a completed turn, retain the session for external
+  ///   checks of its managed services. Bounded to 0...3600 seconds; 0 closes immediately.
+  ///   Call `waitForClose()` before exiting, or `close()` to finish early. Errors and stopped
+  ///   turns close immediately. The grace period never changes the recorded turn duration.
   public func run(
     task: String,
     model: String,
@@ -384,9 +414,15 @@ public final class Agent: @unchecked Sendable {
     dialect: DialectOverride = .auto,
     resuming: LoadedSession? = nil,
     onEvent: @escaping @Sendable (AgentEvent) -> Void = { _ in },
-    sessionId: String? = nil)
+    sessionId: String? = nil,
+    keepAliveSeconds: Int = 0)
     async throws -> AgentResult
   {
+    _ = await close()
+    sessionLock.withLock {
+      completionTask = nil
+      closeRequested = false
+    }
     let startedAt = Date()
     var runConfiguration = configuration
     runConfiguration.model = model
@@ -462,13 +498,25 @@ public final class Agent: @unchecked Sendable {
       }
       throw error
     }
-    for notice in await session.end(reason: .exit) {
-      onEvent(.hookNotice(event: notice.event, output: notice.output))
-    }
-
     guard let record = await session.lastRecord else {
+      _ = await session.end(reason: .other)
       // The turn loop always appends a record before finishing without error.
       throw SessionError.nothingToVerify
+    }
+    if keepAliveSeconds > 0, record.stopReason == .completed, !Task.isCancelled {
+      let seconds = min(keepAliveSeconds, 3600)
+      let task = Task {
+        try? await Task.sleep(nanoseconds: UInt64(seconds) * 1_000_000_000)
+        return await session.end(reason: .exit)
+      }
+      sessionLock.withLock {
+        completionTask = task
+        if closeRequested { task.cancel() }
+      }
+    } else {
+      for notice in await session.end(reason: .exit) {
+        onEvent(.hookNotice(event: notice.event, output: notice.output))
+      }
     }
     return AgentResult(
       text: finalText, record: record, sessionId: session.id,

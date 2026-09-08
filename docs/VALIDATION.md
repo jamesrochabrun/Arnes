@@ -1,6 +1,6 @@
 # Agentic-quality validation audit
 
-Updated 2026-09-07; continues the 2026-09-06 audit. The objective is reliable agentic work before distribution.
+Updated 2026-09-08; continues the 2026-09-06 audit. The objective is reliable agentic work before distribution.
 This records implementation evidence and missing validation; it is not a benchmark score
 or approval to promote experimental defaults. See [the implementation ledger](../ENHANCEMENTS.md).
 
@@ -8,7 +8,7 @@ or approval to promote experimental defaults. See [the implementation ledger](..
 
 | Requirement | Current implementation and direct checks | Still unproven |
 | --- | --- | --- |
-| Reproducible Terminal-Bench | [Adapter and contract tests](../benchmarks/terminal-bench/): pinned executable digest, explicit model/effort, isolated config, pack fingerprint, event/transcript capture, failure classification and accounting; 22 offline Python tests pass | Actual Harbor installation, container execution, evidence retrieval and task-verifier integration |
+| Reproducible Terminal-Bench | [Adapter and contract tests](../benchmarks/terminal-bench/): 26 offline Python tests; actual Harbor 0.16.1 installation and human-operated task trials; Linux CLI fixture verifies transcript capture, task permissions and bounded service lifetime | Corrected-adapter task reruns and held-out model-quality evaluation |
 | Model-adaptive prompts and tool descriptions | [ToolGuidanceTests](../Tests/ArnesKitTests/ToolGuidanceTests.swift) exercises actual Chat, Messages and Responses requests, forced Chat, model/family switching, capability gating, unchanged schemas and stable per-turn overrides. [PrefixStabilityTests](../Tests/ArnesKitTests/PrefixStabilityTests.swift) covers deferred effort/system-section changes and rejected active-turn model swaps | Real provider acceptance and independently measured benefit for each opt-in family proposal |
 | Editing recovery | [EditRecoveryTests](../Tests/ArnesKitTests/EditRecoveryTests.swift) runs failed exact edit → reread → successful exact edit through Session over a real CRLF file, with error accounting and proof the failed edit wrote nothing. Location hints do not expose extra contents. Existing stale-read/checkpoint tests remain in the full suite | Whether the guidance reduces retries on development and held-out tasks |
 | Long-task context | [TokenRetentionTests](../Tests/ArnesKitTests/TokenRetentionTests.swift) and [CommandEvidenceTests](../Tests/ArnesKitTests/CommandEvidenceTests.swift): optional estimated-token retention, bounded paired command evidence, clearing without deleting stored history, compaction and resume | Whether a real summarizer preserves objectives, constraints, edits and verification evidence; the integration test deliberately scripts its summary |
@@ -21,6 +21,38 @@ All optional guidance/diagnostics/context/role treatments remain opt-in. A patch
 interface, PTY, LSP and native Linux sandbox are not implemented by this work. They remain
 conditional follow-ups requiring failure evidence and a safety design; container isolation
 is required for the current Linux benchmark adapter.
+
+## Harbor failure corrections on 2026-09-08
+
+The human-operated five-task development run recorded $0.030605772432 and raw rewards
+of 2/5. Four tasks reached pytest: log-summary-date-ranges and sqlite-db-truncate passed;
+git-multibranch failed its check and kv-store-grpc passed 5/7 checks. build-pmars failed
+while downloading the verifier's uv installer and produced no test report, so its zero
+reward is unverified. These observations are diagnostic evidence, not a full-suite score.
+
+Two deterministic reproductions identified integration defects. The adapter's `umask 077`
+made task-created files unreadable to service users. A managed server worked during the
+agent turn but was killed by the normal headless session shutdown before Harbor verified
+it. The adapter now isolates evidence permissions from task permissions and uses the
+explicit `do --keep-alive` grace period. The session retains ownership of its jobs and
+still cleans them up at the deadline or on cancellation. Ordinary runs close immediately.
+
+The [container fixture](../scripts/test-harbor.py) passes default-shutdown, deadline and
+SIGTERM scenarios with the actual Linux CLI and adapter shell. It checks another user's
+file access, private evidence, HTTP reachability after the completed result, subsequent
+service cleanup, complete transcripts and routed-model recording. Each scenario uses
+four scripted loopback responses and zero external model calls. The dependency preflight
+also resolves the batch's pinned uv/Python/pytest requirements in Debian 13 ARM64.
+Neither fixture proves that the three affected tasks now pass; those reruns remain a
+human-operated step with the same model, effort and task budgets.
+
+Local Mac validation: 1,894 Swift tests, one expected skip, zero failures; the additional
+cancelled-waiter cleanup check passes. All 26 Python adapter/report tests and 11 executable
+ACP cases pass. The Linux arm64 static Swift release build succeeds, and its full suite
+passes 1,902 tests with ten platform skips and zero failures. Hosted CI remains a separate
+check of the pushed revision. The corrected binary also passes Harbor 0.16.1 installation
+on git-multibranch, kv-store-grpc and build-pmars: three completed setups, zero errors,
+no model or task-verifier execution. No dependency change is needed for these corrections.
 
 ## Platform validation on 2026-09-07
 

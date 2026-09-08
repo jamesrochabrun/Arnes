@@ -28,13 +28,17 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Install integration test runner
-        run: apt-get update && apt-get install -y python3
+        run: apt-get update && apt-get install -y python3 curl
       - name: Build and test
         run: |
           swift build --product arnes --force-resolved-versions
           swift test --force-resolved-versions
       - name: Offline executable ACP and subprocess integration
         run: python3 scripts/test-acp.py --binary .build/debug/arnes
+      - name: Offline Harbor service lifecycle integration
+        run: |
+          install -m 755 .build/debug/arnes /usr/local/bin/arnes
+          python3 scripts/test-harbor.py
       - name: Offline benchmark adapter tests
         run: python3 -m unittest discover -s benchmarks/terminal-bench -p 'test_*.py'
 

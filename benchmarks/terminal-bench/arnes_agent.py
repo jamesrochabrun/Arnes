@@ -5,6 +5,7 @@ import math
 import os
 from pathlib import Path
 import shlex
+import tempfile
 import uuid
 
 from harbor.agents.installed.base import BaseInstalledAgent, with_prompt_template
@@ -19,6 +20,18 @@ def write_command(path, content):
   """Transfer fixed bytes without interpreting task or pack text as shell syntax."""
   encoded = base64.b64encode(content.encode()).decode()
   return f"printf %s {shlex.quote(encoded)} | base64 -d > {shlex.quote(path)}"
+
+
+def write_private_json(path, value):
+  """Host-derived evidence is private too; replace an existing leaf without following it."""
+  descriptor, temporary = tempfile.mkstemp(prefix=".arnes-", dir=path.parent)
+  try:
+    with os.fdopen(descriptor, "w") as stream:
+      stream.write(json.dumps(value) + "\n")
+    os.replace(temporary, path)
+  finally:
+    if os.path.exists(temporary):
+      os.unlink(temporary)
 
 
 class ArnesAgent(BaseInstalledAgent):
@@ -41,24 +54,32 @@ class ArnesAgent(BaseInstalledAgent):
     self.arnes_provenance["packs"] = sorted(self.arnes_packs)
     try:
       await self.exec_as_root(environment, command=(
-        "set -eu; candidate=$(mktemp /tmp/arnes-binary.XXXXXXXX); "
+        "set -eu; "
+        "if command -v apt-get >/dev/null 2>&1; then "
+        "apt-get update; DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "
+        "ca-certificates curl libstdc++6; fi; "
+        "candidate=$(mktemp /tmp/arnes-binary.XXXXXXXX); "
         "trap 'rm -f \"$candidate\"' EXIT; "
         f"curl --proto '=https' --proto-redir '=https' -fLsS --retry 2 --max-time 120 {shlex.quote(config.binary_url)} -o \"$candidate\"; "
         f"printf '%s  %s\\n' {shlex.quote(config.binary_sha256)} \"$candidate\" | sha256sum -c -; "
         "install -m 755 \"$candidate\" /usr/local/bin/arnes; "
-        "/usr/local/bin/arnes --version"
+        "/usr/local/bin/arnes --version; "
+        "/usr/local/bin/arnes do --help | grep -q -- --keep-alive || "
+        "{ echo 'The pinned binary must support arnes do --keep-alive' >&2; exit 1; }"
       ))
     except Exception:
       # Harbor keeps the setup logs; do not duplicate potentially private exception text.
       Path(self.logs_dir).mkdir(parents=True, exist_ok=True)
-      (Path(self.logs_dir) / "arnes-status.json").write_text(
-        json.dumps(dict(self.arnes_provenance, classification="installation_error")) + "\n")
+      write_private_json(Path(self.logs_dir) / "arnes-status.json",
+        dict(self.arnes_provenance, classification="installation_error"))
       raise
 
   @with_prompt_template
   async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
     config = self.arnes_config
-    session_id = str(uuid.uuid4())
+    # Arnes canonicalizes --session-id with Swift UUID.uuidString. Match its
+    # uppercase filename when copying the transcript on case-sensitive Linux.
+    session_id = str(uuid.uuid4()).upper()
     self.arnes_provenance["session_id"] = session_id
     setup = [
       f"mkdir -p {LOGS}/packs",
@@ -72,16 +93,28 @@ class ArnesAgent(BaseInstalledAgent):
       f"sha256sum /usr/local/bin/arnes > {LOGS}/arnes-binary.sha256",
       f"export ARNES_CONFIG={LOGS}/arnes-config.json ARNES_PACKS_DIR={LOGS}/packs",
     ])
-    # Keep exit status without preventing Harbor's independent task verifier. Event
-    # previews are not complete tool results; save the actual session transcript too.
+    # The supervisor records the eventual process exit. With --keep-alive, a completed
+    # result hands control to Harbor while Arnes still owns its managed services. The
+    # bounded CLI timer and Harbor's container teardown both limit that lifetime.
+    # Evidence uses 077; the CLI and its task artifacts inherit the original task umask.
     command = "; ".join(setup)
     command += (
-      "; set +e; " + config.command(instruction, session_id)
-      + f" </dev/null >{LOGS}/arnes-events.jsonl 2>{LOGS}/arnes-stderr.log; "
-      + f"arnes_status=$?; printf '%s\\n' \"$arnes_status\" > {LOGS}/arnes-exit-code.txt; "
+      "; set +e; ("
+      + '(umask "$arnes_task_umask"; exec ' + config.command(instruction, session_id) + ")"
+      + f" </dev/null >{LOGS}/arnes-events.jsonl 2>{LOGS}/arnes-stderr.log & arnes_pid=$!; "
+      + f"printf '%s\\n' \"$arnes_pid\" > {LOGS}/arnes-pid.txt; "
+      + "trap 'kill -TERM \"$arnes_pid\" 2>/dev/null || true; wait \"$arnes_pid\"' TERM INT; "
+      + f"wait \"$arnes_pid\"; arnes_status=$?; printf '%s\\n' \"$arnes_status\" > {LOGS}/arnes-exit-code.txt"
+      + f") </dev/null >{LOGS}/arnes-supervisor.log 2>&1 & arnes_supervisor=$!; "
+      + "trap 'kill -TERM \"$arnes_supervisor\" 2>/dev/null || true' EXIT; "
+      + f"while ! test -f {LOGS}/arnes-exit-code.txt; do "
+      + f"if tail -n 1 {LOGS}/arnes-events.jsonl 2>/dev/null | "
+      + "grep -Eq '\"type\"[[:space:]]*:[[:space:]]*\"result\"'; then break; fi; "
+      + "kill -0 \"$arnes_supervisor\" 2>/dev/null || break; sleep 0.1; done; "
       + "arnes_home=$(getent passwd \"$(id -u)\" | cut -d: -f6); "
       + f"if test -n \"$arnes_home\" && test -f \"$arnes_home/.arnes/sessions/{session_id}.jsonl\"; then "
-      + f"cp \"$arnes_home/.arnes/sessions/{session_id}.jsonl\" {LOGS}/arnes-transcript.jsonl; fi; true"
+      + f"cp \"$arnes_home/.arnes/sessions/{session_id}.jsonl\" {LOGS}/arnes-transcript.jsonl || exit 1; fi; "
+      + "trap - EXIT; true"
     )
     try:
       # Explicit per-exec environment, never interpolate a credential into shell text.
@@ -90,7 +123,7 @@ class ArnesAgent(BaseInstalledAgent):
       env = {"OPENROUTER_API_KEY": key} if key else None
       # Some Harbor releases log raw per-exec env in the installed-agent helper.
       # Use the environment API directly for this credential-bearing invocation.
-      execution = await environment.exec(command="set -o pipefail; set -eu; umask 077; " + command,
+      execution = await environment.exec(command="set -o pipefail; set -eu; arnes_task_umask=$(umask); umask 077; " + command,
         env=env, timeout_sec=config.timeout + 60)
       if execution.return_code != 0:
         raise RuntimeError("Benchmark setup or evidence capture failed; inspect the environment logs")
@@ -111,7 +144,7 @@ class ArnesAgent(BaseInstalledAgent):
       parsed = parse_trajectory([], exit_code)
     result = parsed.pop("result")
     if result is not None:
-      (root / "arnes-result.json").write_text(json.dumps(result) + "\n")
+      write_private_json(root / "arnes-result.json", result)
       for key, field in [("cost_usd", "cost_usd"), ("prompt_tokens", "n_input_tokens"),
                          ("completion_tokens", "n_output_tokens"), ("cached_tokens", "n_cache_tokens")]:
         value = result.get(key)
@@ -124,7 +157,7 @@ class ArnesAgent(BaseInstalledAgent):
                      "routed_models": result.get("routed_models"),
                      "steps": result.get("steps"), "tool_calls": result.get("tool_calls")})
     parsed["transcript_available"] = (root / "arnes-transcript.jsonl").is_file()
-    (root / "arnes-status.json").write_text(json.dumps(parsed) + "\n")
+    write_private_json(root / "arnes-status.json", parsed)
     if context.metadata is None:
       context.metadata = {}
     context.metadata["arnes"] = parsed

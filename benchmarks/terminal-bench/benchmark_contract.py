@@ -19,6 +19,7 @@ class BenchmarkConfig:
   effort: str
   max_steps: int = 100
   timeout: int = 900
+  keep_alive_seconds: int = 1200
   budget: float = 5.0
   dialect: str = "auto"
   command_diagnostics: bool = False
@@ -43,6 +44,7 @@ class BenchmarkConfig:
       model=required("ARNES_MODEL"), effort=required("ARNES_EFFORT"),
       max_steps=int(environment.get("ARNES_MAX_STEPS", "100")),
       timeout=int(environment.get("ARNES_TIMEOUT", "900")),
+      keep_alive_seconds=int(environment.get("ARNES_KEEP_ALIVE_SECONDS", "1200")),
       budget=float(environment.get("ARNES_BUDGET", "5")),
       dialect=environment.get("ARNES_DIALECT", "auto"),
       command_diagnostics=boolean("ARNES_COMMAND_DIAGNOSTICS"),
@@ -64,12 +66,14 @@ class BenchmarkConfig:
       raise ValueError("Benchmark limits must be positive and finite")
     if config.keep_recent_tool_tokens is not None and config.keep_recent_tool_tokens < 0:
       raise ValueError("ARNES_KEEP_RECENT_TOOL_TOKENS must be nonnegative")
+    if not 0 <= config.keep_alive_seconds <= 3600:
+      raise ValueError("ARNES_KEEP_ALIVE_SECONDS must be between 0 and 3600")
     return config
 
   def provenance(self):
     values = asdict(self)
     del values["binary_url"]  # A signed URL is private; the digest identifies its contents.
-    return dict(values, provider="openrouter", bare=True, memory=False, schema_version=2)
+    return dict(values, provider="openrouter", bare=True, memory=False, schema_version=3)
 
   def runtime_config(self):
     config = {
@@ -87,6 +91,7 @@ class BenchmarkConfig:
       "/usr/local/bin/arnes", "do", instruction, "-m", self.model,
       "--effort", self.effort, "--dialect", self.dialect,
       "--max-steps", str(self.max_steps), "--timeout", str(self.timeout),
+      "--keep-alive", str(self.keep_alive_seconds),
       "--budget", str(self.budget), "--yes", "--add-dir", "/", "--bare",
       "--no-memory", "--session", "--session-id", session_id,
       "--output-format", "stream-json", "--include-partial",

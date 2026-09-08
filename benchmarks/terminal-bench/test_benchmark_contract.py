@@ -26,6 +26,7 @@ class BenchmarkContractTests(unittest.TestCase):
       ("ARNES_DIALECT", "banana"), ("ARNES_TIMEOUT", "0"),
       ("ARNES_MAX_STEPS", "-1"), ("ARNES_BUDGET", "nan"), ("ARNES_BUDGET", "inf"),
       ("ARNES_LINUX_BINARY_SHA256", "bad"),
+      ("ARNES_KEEP_ALIVE_SECONDS", "-1"), ("ARNES_KEEP_ALIVE_SECONDS", "3601"),
       ("ARNES_LINUX_BINARY_URL", "http://example.com/binary"),
       ("ARNES_LINUX_BINARY_URL", "https://user:secret@example.com/binary"),
     ]:
@@ -37,6 +38,7 @@ class BenchmarkContractTests(unittest.TestCase):
       ARNES_LINUX_BINARY_URL="https://example.com/binary?token=private"))
     self.assertNotIn("private", json.dumps(config.provenance()))
     self.assertEqual(config.provenance()["binary_sha256"], "a" * 64)
+    self.assertEqual(config.provenance()["keep_alive_seconds"], 1200)
 
   def test_experiment_settings_match_runtime_config_and_provenance(self):
     base = BenchmarkConfig.from_environment(self.environment())

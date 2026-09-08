@@ -285,6 +285,7 @@ arnes do "..." --yes --output-format stream-json [--include-partial]  # one JSON
 arnes do "..." --yes --output-last-message /tmp/answer.md         # also write the final assistant message to a file (atomic)
 arnes do "..." --yes --output-schema ./answer.schema.json          # final answer as JSON matching the schema (file or inline {…}); envelope's structured_output; exit 3 if it never validates
 arnes do "..." --yes --max-steps 12 --timeout 300                 # caps: model steps (default unlimited) and wall-clock seconds
+arnes do "start the service" --yes --output-format stream-json --keep-alive 600  # external checks after the result
 arnes do "..." --yes --bare                                       # reproducible CI run: no MCP, skills, subagents, hooks, instruction files or memory
 arnes do "..." --yes --no-memory                                  # skip the project's memory (~/.arnes/memory/<project>/MEMORY.md) — see "Memory"
 arnes do "..." --yes -C path/to/repo                              # run in another directory (tools, trust, instructions, sandbox follow)
@@ -501,6 +502,16 @@ Precedence when several apply: 1/130/143 first, then 4, then 2, then 3. A `--tim
 deadline interrupts the session (its `runs.jsonl` row says `interrupted`) and the envelope says
 `stop_reason: timeout` — the envelope knows the cause. A non-zero exit is **not** a reason to
 retry blindly: read `stop_reason` and `permission_denials` and relay them.
+
+**External service verification.** `--keep-alive N` (integer 0...3600, default 0) retains a
+completed session and its managed background jobs after emitting the final result. It
+runs no more agent steps and closes the session at the deadline; SIGINT/SIGTERM closes it
+early (exit 130/143, with the already completed result unchanged). Failed/stopped turns
+close immediately. The model's `--timeout` and recorded duration exclude this grace period.
+Not with `--panel` or `--verify`. Stream consumers may begin their external checks at the
+result line, while process exit comes later. The final-message file is written before
+that handoff; configured SessionEnd hooks still run at close and their notices go to stderr. Ordinary runs still kill
+managed jobs before returning their result. This flag does not grant any tool permission.
 
 **Permission rules + modes.** `~/.arnes/rules.json` holds `{"deny":[…],"ask":[…],"allow":[…]}`
 entries in the Claude Code spelling — `Bash(git status:*)`, `Read(~/.ssh/**)`, `Edit(src/**)`,

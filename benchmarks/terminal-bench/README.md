@@ -9,7 +9,10 @@ This adapter is evaluation infrastructure, not a published score.
 The adapter API and CLI syntax were checked against
 [Harbor v0.16.1 source](https://github.com/laude-institute/harbor/tree/v0.16.1).
 Install and record that exact version in your evaluation environment; source inspection
-and offline mocks are not a successful Harbor/container integration run. Supply a
+and offline mocks are not a successful Harbor/container integration run. On 2026-09-07,
+an installation-only check passed on Terminal-Bench 2.0 `fix-git`, rebuilt for Linux
+arm64, using the binary built from `81b468c` and the adapter's prerequisite bootstrap.
+It verified download, checksum and version 0.7.0; no model or task verifier ran. Supply a
 Linux binary built from the source revision under test, its SHA-256 digest, an explicit
 model, and an effort setting. There is no moving-release download or source fallback.
 
@@ -21,6 +24,7 @@ export ARNES_MODEL='REPLACE_WITH_EXPLICIT_MODEL_SLUG'
 export ARNES_EFFORT=high
 export ARNES_MAX_STEPS=100
 export ARNES_TIMEOUT=900
+export ARNES_KEEP_ALIVE_SECONDS=1200
 export ARNES_BUDGET=5
 export ARNES_DIALECT=auto
 
@@ -36,7 +40,22 @@ allows the intended Arnes budget plus evidence collection. The adapter's per-com
 deadline is `ARNES_TIMEOUT + 60` seconds; it cannot extend Harbor's outer deadline.
 The binary must match the task container's architecture and support the current CLI
 flags. A bad download, checksum, architecture or executable fails installation visibly.
+Installation also checks for `do --keep-alive`; older binaries must be rebuilt.
 Use an unsigned public artifact URL: Harbor may log installation commands.
+On Debian/Ubuntu task images the adapter installs `ca-certificates`, `curl` (including
+its libcurl runtime), and `libstdc++6` before downloading the executable. Other images
+must already provide these prerequisites and a compatible glibc runtime. A static Swift
+standard library build still depends on these system libraries.
+
+The adapter preserves the task image's umask for Arnes and task-created files, while
+creating its evidence with owner-only permissions. On a completed turn it returns to
+Harbor as soon as the final result and transcript are available. Arnes retains ownership
+of managed services for `ARNES_KEEP_ALIVE_SECONDS` (default 1200; allowed 0...3600), so
+the independent verifier can connect to them. Choose a grace period longer than the
+task's verifier timeout plus scheduling overhead; each job's own timeout still applies. Arnes closes the session and kills its
+jobs at that deadline or on SIGINT/SIGTERM; Harbor normally destroys the container first.
+No additional model calls occur during this period. Stopped or errored turns close immediately.
+Use 0 for immediate shutdown. This option does not extend the model's step/time/cost limits.
 
 The initial reproducible configuration uses OpenRouter, `--bare --no-memory`, disabled
 manifest caching, and a separate packs directory. It ignores personal config, skills,
@@ -59,7 +78,7 @@ Optional, independently controlled experiments (all off/unset in the control):
 - `ARNES_KEEP_RECENT_TOOL_TOKENS=4000`: replace recent-result count with an estimated token budget.
 
 Boolean controls accept only `true` or `false`; the token budget is a nonnegative integer.
-The adapter writes these into its isolated config and provenance (schema version 2).
+The adapter writes these into its isolated config and provenance (schema version 3).
 Manifest caching is disabled through `policies.manifestCache.enabled`; no personal config
 is edited. A feature's implementation is not evidence that it improves task completion.
 
@@ -73,6 +92,19 @@ Each trial's mounted `/logs/agent` directory contains:
 - `arnes-transcript.jsonl`: persisted messages and tool results, copied after the run.
 - `arnes-result.json`, `arnes-last-message.md`: result envelope and readable final answer.
 - `arnes-exit-code.txt`, `arnes-stderr.log`, `arnes-status.json`: failure evidence.
+- `arnes-pid.txt`, `arnes-supervisor.log`: the retained CLI process and its supervisor.
+
+`arnes-exit-code.txt` exists only after the CLI exits; it can be absent when Harbor
+collects logs during the grace period. A complete `arnes-result.json` is the turn's
+handoff; an absent process exit code alone does not mean an incomplete turn.
+
+The adapter uses uppercase session UUIDs to match Arnes's canonical transcript filenames
+on Linux. A completed run should report `transcript_available: true`; check that field
+alongside the verifier result before expanding a run. The first human-operated `fix-git`
+trial on 2026-09-08 passed both verifier checks for $0.002143683724, but its transcript
+was not retained because the earlier adapter used lowercase UUIDs. Its events and result
+remain valid; it is not a complete transcript or a full-suite score. The filename fix
+is covered by a shell regression and an actual Linux binary with a loopback provider fixture.
 
 A killed container can leave an incomplete event stream and no copied transcript; the
 status records this instead of silently treating it as success. Tool-result previews
@@ -86,6 +118,21 @@ from a provider failure requires inspecting the recorded error; the adapter does
 guess from error prose. `completed` means the agent stopped, **not that the task passed**.
 Harbor's task verifier determines correctness. Report infrastructure failures separately
 and also include them in an end-to-end reliability denominator.
+
+For pytest tasks that write CTRF (including the five-task development batch), run:
+
+```bash
+python3 benchmarks/terminal-bench/check_verification.py /path/to/harbor/job
+```
+
+This preserves Harbor's raw reward and distinguishes verified failures from missing,
+partial or inconsistent test reports. A September 8 `build-pmars` trial had reward 0
+after the uv installer download failed; no task tests ran. It is unverified, not evidence
+that the generated program failed its tests. Before spending on a rerun, execute
+`preflight-verifier.sh` inside a disposable copy of the task's image. It downloads uv
+0.9.5 and resolves Python 3.13, pytest 8.4.1 and pytest-json-ctrf 0.3.5, matching this
+development batch. The script refuses to run on the host. It checks dependency availability;
+it does not run or modify task tests, and cannot guarantee a later network request succeeds.
 
 ## Comparing changes
 

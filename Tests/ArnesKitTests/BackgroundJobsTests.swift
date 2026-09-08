@@ -511,6 +511,53 @@ final class BackgroundJobsTests: XCTestCase {
 
   // MARK: Session.shutdown
 
+  func testHeadlessCompletionGraceKeepsJobsUntilDeadlineCloseOrInterrupt() async throws {
+    for end in ["default", "deadline", "close", "interrupt", "cancellation"] {
+      let registry = JobRegistry(logRoot: scratch)
+      let mock = MockOpenRouterService()
+      mock.manifestJSON = Fixtures.manifest(Fixtures.manifestModel(id: "test/model"))
+      mock.chunkScripts = [[Fixtures.textChunk("done"), Fixtures.usageChunk(cost: 0)]]
+      let store = tempStore()
+      let agent = Agent(service: mock,
+        tools: HarnessAssembly.coreTools(ToolContext(root: scratch, jobs: registry)),
+        store: store, configuration: .init(model: "test/model"))
+      let job = try await registry.start(command: "sleep 30", cwd: scratch)
+      let result = try await agent.run(task: "done", model: "test/model",
+        keepAliveSeconds: end == "default" ? 0 : end == "deadline" ? 1 : 30)
+      XCTAssertEqual(result.record.stopReason, .completed)
+      let countAtReturn = await registry.runningCount
+      XCTAssertEqual(countAtReturn, end == "default" ? 0 : 1, end)
+      if end == "close" { _ = await agent.close() }
+      if end == "interrupt" { agent.interrupt() }
+      if end == "cancellation" {
+        let waiter = Task { await agent.waitForClose() }
+        waiter.cancel()
+        _ = await waiter.value
+      }
+      _ = await agent.waitForClose()
+      let gone = await processGone(job.pid)
+      XCTAssertTrue(gone, end)
+      let finalRecord = await agent.lastSession?.lastRecord
+      XCTAssertEqual(finalRecord?.stopReason, .completed, "cleanup never rewrites the completed turn")
+    }
+  }
+
+  func testStoppedHeadlessRunClosesImmediatelyEvenWithCompletionGrace() async throws {
+    let registry = JobRegistry(logRoot: scratch)
+    let mock = MockOpenRouterService()
+    mock.manifestJSON = Fixtures.manifest(Fixtures.manifestModel(id: "test/model"))
+    mock.chunkScripts = [[Fixtures.toolCallChunk(id: "c1", name: "bash",
+      arguments: #"{"command":"echo hi"}"#), Fixtures.usageChunk(cost: 0)]]
+    let agent = Agent(service: mock,
+      tools: HarnessAssembly.coreTools(ToolContext(root: scratch, jobs: registry)),
+      store: tempStore(), configuration: .init(model: "test/model", maxStepsPerTurn: 1))
+    let job = try await registry.start(command: "sleep 30", cwd: scratch)
+    let result = try await agent.run(task: "go", model: "test/model", keepAliveSeconds: 30)
+    XCTAssertEqual(result.record.stopReason, .maxSteps)
+    let gone = await processGone(job.pid)
+    XCTAssertTrue(gone)
+  }
+
   func testSessionShutdownAndEndKillTheToolsetsJobs() async throws {
     let registry = JobRegistry(logRoot: scratch)
     let tools = HarnessAssembly.coreTools(ToolContext(root: scratch, jobs: registry))

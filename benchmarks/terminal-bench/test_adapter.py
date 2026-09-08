@@ -1,12 +1,16 @@
 """Adapter orchestration against the documented Harbor surface, not a live Harbor test."""
+import asyncio
 import importlib.util
 import json
+import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 import tempfile
 import types
 import unittest
+import uuid
 from unittest.mock import patch
 from benchmark_contract import BenchmarkConfig
 
@@ -99,6 +103,98 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(context.metadata["arnes"]["classification"], "task_attempt")
     self.assertEqual(context.metadata["arnes"]["routed_models"], ["test/routed"])
     self.assertFalse(context.metadata["arnes"]["transcript_available"])
+
+  async def test_copies_transcript_from_canonical_cli_session_filename(self):
+    root = Path(self.directory.name)
+    home = root / "home"
+    binary = root / "arnes-fixture"
+    # Like Swift's UUID.uuidString, the CLI fixture canonicalizes the supplied ID.
+    # Run the adapter's shell to exercise the actual post-run file lookup and copy.
+    binary.write_text(f"#!{sys.executable}\n" + """import json
+from pathlib import Path
+import sys
+import uuid
+
+if '--version' in sys.argv:
+  print('fixture')
+  sys.exit(0)
+session = str(uuid.UUID(sys.argv[sys.argv.index('--session-id') + 1])).upper()
+home = Path(__file__).parent / 'home'
+store = home / '.arnes/sessions'
+store.mkdir(parents=True)
+(store / (session + '.jsonl')).write_text('complete tool result\\n')
+print(json.dumps(dict(type='result', is_error=False, stop_reason='completed', session_id=session)))
+""")
+    binary.chmod(0o700)
+    async def execute(**kwargs):
+      command = kwargs["command"].replace("/usr/local/bin/arnes", shlex.quote(str(binary)))
+      passwd = shlex.quote(f"fixture:x:1:1:fixture:{home}:/bin/bash")
+      command = f"getent() {{ printf '%s\\n' {passwd}; }}; sha256sum() {{ :; }}; " + command
+      result = subprocess.run(["bash", "-c", command], capture_output=True, text=True, timeout=10)
+      self.assertEqual(result.returncode, 0, result.stderr)
+      return types.SimpleNamespace(return_code=result.returncode)
+    self.agent.arnes_config = BenchmarkConfig.from_environment(self.environment)
+    self.agent.arnes_packs = {}
+    self.agent.arnes_provenance = self.agent.arnes_config.provenance()
+    context = types.SimpleNamespace(metadata=None)
+    ident = uuid.UUID("abcdefab-1234-4567-89ab-abcdefabcdef")
+    with patch.object(adapter, "LOGS", str(root)), patch.object(adapter.uuid, "uuid4", return_value=ident):
+      await self.agent.run("fixture", types.SimpleNamespace(exec=execute), context)
+    self.assertTrue(context.metadata["arnes"]["transcript_available"])
+    self.assertEqual((root / "arnes-transcript.jsonl").read_text(), "complete tool result\n")
+    provenance = json.loads((root / "arnes-provenance.json").read_text())
+    result = json.loads((root / "arnes-result.json").read_text())
+    self.assertEqual(provenance["session_id"], result["session_id"])
+
+  async def test_task_umask_is_preserved_while_evidence_stays_private_and_handoff_is_early(self):
+    for mask in [0o022, 0o027]:
+      root = Path(self.directory.name) / str(mask)
+      root.mkdir()
+      binary = root / "arnes-fixture"
+      binary.write_text(f"#!{sys.executable}\n" + """import json, os, sys, time
+from pathlib import Path
+if '--version' in sys.argv:
+  print('fixture')
+  sys.exit(0)
+root = Path(__file__).parent
+(root / 'task').mkdir()
+(root / 'task/output').write_text('public task content')
+(root / 'pid').write_text(str(os.getpid()))
+print(json.dumps(dict(type='result', is_error=False, stop_reason='completed')), flush=True)
+deadline = time.monotonic() + 10
+while not (root / 'release').exists() and time.monotonic() < deadline:
+  time.sleep(0.02)
+""")
+      binary.chmod(0o700)
+      async def execute(**kwargs):
+        command = kwargs["command"].replace("/usr/local/bin/arnes", shlex.quote(str(binary)))
+        command = f"umask {mask:o}; getent() {{ :; }}; sha256sum() {{ :; }}; " + command
+        completed = subprocess.run(["bash", "-c", command], capture_output=True, text=True, timeout=5)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        return types.SimpleNamespace(return_code=completed.returncode)
+      self.agent.arnes_config = BenchmarkConfig.from_environment(self.environment)
+      self.agent.logs_dir = root
+      self.agent.arnes_provenance = self.agent.arnes_config.provenance()
+      self.agent.arnes_packs = {}
+      context = types.SimpleNamespace(metadata=None)
+      with patch.object(adapter, "LOGS", str(root)):
+        await self.agent.run("fixture", types.SimpleNamespace(exec=execute), context)
+      try:
+        self.assertFalse((root / "arnes-exit-code.txt").exists(), "handoff precedes process exit")
+        self.assertEqual(context.metadata["arnes"]["classification"], "task_attempt")
+        os.kill(int((root / "pid").read_text()), 0)
+        self.assertEqual((root / "task").stat().st_mode & 0o777, 0o777 & ~mask)
+        self.assertEqual((root / "task/output").stat().st_mode & 0o777, 0o666 & ~mask)
+        for name in ["arnes-events.jsonl", "arnes-stderr.log", "arnes-config.json", "arnes-provenance.json",
+                     "arnes-result.json", "arnes-status.json"]:
+          self.assertEqual((root / name).stat().st_mode & 0o777, 0o600, name)
+      finally:
+        (root / "release").touch()
+      for _ in range(200):
+        if (root / "arnes-exit-code.txt").exists():
+          break
+        await asyncio.sleep(0.05)
+      self.assertEqual((root / "arnes-exit-code.txt").read_text().strip(), "0")
 
   async def test_agent_environment_overrides_host_and_credentials_stay_out_of_commands(self):
     self.agent.extra_env = dict(self.environment, ARNES_MAX_STEPS="7", OPENROUTER_API_KEY="unit-test-credential")

@@ -210,6 +210,9 @@ struct Do: AsyncParsableCommand {
   @Option(help: "Wall-clock limit in seconds. At the deadline the run is interrupted (its record says interrupted) and reported as stop_reason timeout, exit 3.")
   var timeout: Double?
 
+  @Option(help: "Keep a completed session and its managed services alive for this many seconds after emitting the result (0...3600, default 0). For external verifiers; no further agent steps. SIGINT/SIGTERM closes it early. Not with --panel or --verify.")
+  var keepAlive: Int = 0
+
   @Flag(help: "Reproducible CI mode: no MCP servers, skills, subagents, hooks, project instruction files or memory — only the harness's own tools and prompt.")
   var bare = false
 
@@ -311,6 +314,12 @@ struct Do: AsyncParsableCommand {
   /// this flag feeds: candidates run unattended in their snapshots, so a mode would be
   /// silently ignored — and `plan` ignored means a dry run that applies a winner's diff.
   func validate() throws {
+    guard (0...3600).contains(keepAlive) else {
+      throw ValidationError("--keep-alive must be between 0 and 3600 seconds.")
+    }
+    if keepAlive > 0, panel != nil || verify != nil {
+      throw ValidationError("--keep-alive does not combine with --panel or --verify.")
+    }
     if let maxSteps, maxSteps < 1 {
       throw ValidationError("--max-steps must be at least 1.")
     }
@@ -881,7 +890,8 @@ struct Do: AsyncParsableCommand {
           dialect: dialectOverride,
           resuming: continuing?.loaded,
           onEvent: { emitter.emit($0) },
-          sessionId: pinnedSessionId)
+          sessionId: pinnedSessionId,
+          keepAliveSeconds: keepAlive)
       })
     // The servers are closed on every path (a thrown run included) — the process may well
     // stay up to print the envelope, so stdin EOF alone can't be relied on to end them.
@@ -926,8 +936,19 @@ struct Do: AsyncParsableCommand {
         costEstimated: costEstimated,
         durationMs: Int(Date().timeIntervalSince(startedAt) * 1000))
     }
+    // A retained session must also close if writing the final artifact fails. Successful
+    // retained runs publish it before the result, which is an external verifier's handoff.
+    if keepAlive > 0, let outputLastMessage {
+      do {
+        try Self.writeLastMessage(result.structuredOutput.map(HeadlessJSON.line) ?? result.result,
+          to: outputLastMessage)
+      } catch {
+        _ = await agent.close()
+        throw error
+      }
+    }
     emitter.finish(result)
-    if let outputLastMessage {
+    if keepAlive == 0, let outputLastMessage {
       // With a schema the file is the validated object (one line); the prose otherwise — and
       // when the structured request never validated, so a consumer always gets *an* answer.
       let lastMessage = result.structuredOutput.map(HeadlessJSON.line) ?? result.result
@@ -938,6 +959,17 @@ struct Do: AsyncParsableCommand {
       stderr.write(Data("session \(result.sessionId) — resume with: arnes resume \(result.sessionId)\n".utf8))
     }
     var code = ArnesExit.code(for: result, failOnDenied: failOnDenied, signal: signals.received)
+    if keepAlive > 0 {
+      if code != ArnesExit.ok.rawValue { _ = await agent.close() }
+      // The result stays the final stdout event. Lifecycle hook notices after the handoff
+      // go to stderr, and a signal still controls the process's eventual exit status.
+      for notice in await agent.waitForClose() {
+        if let line = HeadlessEmitter.textLine(for: .hookNotice(event: notice.event, output: notice.output)) {
+          stderr.write(Data((line + "\n").utf8))
+        }
+      }
+      if let received = signals.received { code = received.exitCode }
+    }
     // The trigger (P2): a *finished* run whose verifier said FAIL — a run that stopped short was
     // never verified, an interrupted or thrown one neither — re-runs the task as a panel over the
     // pre-run snapshot, applies the winner and re-verifies; the final verdict decides the exit
