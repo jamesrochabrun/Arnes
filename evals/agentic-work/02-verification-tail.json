@@ -1,0 +1,7 @@
+{
+  "id": "verification-tail",
+  "prompt": "Repair parse_config in config.py. It must ignore empty/comment lines, split key=value only on the first equals sign, trim key/value whitespace, reject duplicate keys and lines without an equals sign with ValueError, and reject empty keys. Preserve the existing function name/signature. Run checks and add regression tests. The existing check_config.py is a noisy smoke check, not complete coverage; do not change it.",
+  "setup": "printf '%s\n' 'def parse_config(text):' '  return dict(line.split(\"=\") for line in text.splitlines())' > config.py; printf '%s\n' 'from config import parse_config' 'for n in range(1500):' '  print(\"checking fixture\", n)' 'assert parse_config(\" a = b=c \") == {\"a\": \"b=c\"}' 'print(\"smoke check passed\")' > check_config.py",
+  "check": "python3 - <<'PY'\nfrom config import parse_config\nfrom pathlib import Path\nassert Path('check_config.py').read_text() == 'from config import parse_config\\nfor n in range(1500):\\n  print(\"checking fixture\", n)\\nassert parse_config(\" a = b=c \") == {\"a\": \"b=c\"}\\nprint(\"smoke check passed\")\\n'\nassert parse_config('') == {}\nassert parse_config('  # comment\\n\\n a = b=c \\nz= ') == {'a': 'b=c', 'z': ''}\nfor text in ('a=1\\na=2', ' a=1\\na =2', 'missing', '=empty', ' =empty'):\n  try:\n    parse_config(text)\n  except ValueError:\n    pass\n  else:\n    raise AssertionError(('invalid config accepted', text))\nassert list(Path('.').glob('**/test*.py')), 'add regression tests'\nPY",
+  "limits": {"maxSteps": 60, "maxCostUSD": 3}
+}

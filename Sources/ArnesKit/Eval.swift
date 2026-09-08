@@ -541,6 +541,8 @@ public final class EvalRunner: @unchecked Sendable {
   /// `reasoningEffort` set (not `none`), is not offered the `think` tool. false = every trial is
   /// offered it, the shipped default — this is the switch the A/B flips.
   private let adaptiveThink: Bool
+  private let commandDiagnostics: Bool
+  private let compaction: CompactionPolicy
   /// The A/B arm name stamped on every row of the run (`EvalOutcome.label`); nil = unlabelled.
   private let label: String?
 
@@ -579,10 +581,14 @@ public final class EvalRunner: @unchecked Sendable {
     budgetUSD: Double? = nil,
     toolResultGuard: ToolResultGuardPolicy = .default,
     adaptiveThink: Bool = false,
-    label: String? = nil)
+    label: String? = nil,
+    commandDiagnostics: Bool = false,
+    compaction: CompactionPolicy = .default)
   {
     self.toolResultGuard = toolResultGuard
     self.adaptiveThink = adaptiveThink
+    self.commandDiagnostics = commandDiagnostics
+    self.compaction = compaction
     self.label = label
     self.transcriptStore = transcriptStore
     self.judgeModel = judgeModel
@@ -789,6 +795,8 @@ public final class EvalRunner: @unchecked Sendable {
     // The P1 A/B switch: the trial's session (and, through `forSubagent`, its subagents) omits
     // `think` for a natively reasoning model under a dial only when the runner says so.
     configuration.adaptiveThink = adaptiveThink
+    configuration.commandDiagnostics = commandDiagnostics
+    configuration.compaction = compaction
     // Captured once per trial: the lead's block and any subagent's block share the same facts.
     let facts = environmentContext ? EnvironmentContext.Facts(sandbox: sandbox) : nil
     if let facts {
@@ -823,6 +831,14 @@ public final class EvalRunner: @unchecked Sendable {
         catalog: catalog,
         defaults: subagentDefaults,
         environmentContext: facts,
+        toolContext: context,
+        makeSandbox: { [makeSandbox] snapshotRoot in
+          guard var isolated = makeSandbox?(snapshotRoot) else { return nil }
+          // The parent trial and any rubric reference are under the otherwise writable
+          // temp tree. Isolation may read them but must not write outside its own copy.
+          isolated.protectedSubpaths += [workdir] + (context.sandbox?.protectedSubpaths ?? [])
+          return isolated
+        },
         configuration: taskConfiguration)
       tool.parentModel = { model }
       taskTool = tool
@@ -857,7 +873,16 @@ public final class EvalRunner: @unchecked Sendable {
     if let taskTool {
       // The delegation hooks' payload and the nested records name the session that spawned
       // the agent.
-      agent.onSessionStart = { session in taskTool.parentSessionId = session.id }
+      agent.onSessionStart = { session in
+        taskTool.parentSessionId = session.id
+        taskTool.parentModel = { await session.model }
+        taskTool.parentBudgetRemaining = {
+          guard let costCap else { return nil }
+          return max(0, costCap - (await session.costUSD))
+        }
+        taskTool.parentEffort = { await session.currentReasoningEffort }
+        taskTool.parentHistory = { (await session.history, await session.compactionSummary) }
+      }
     }
     // "The current directory" is the trial directory: bash runs with that cwd and every
     // path-taking tool resolves against it.

@@ -32,6 +32,9 @@ delegation override was not adopted.
 Use these tasks as steps/cost baselines and delegation-behavior probes. A delegation
 count alone does not demonstrate a better outcome. The dated methods, model aliases,
 budgets, results, and decisions are in [the A/B record](../ab/README.md), especially §3b–3d.
+For a role comparison that scores correctness without requiring delegation, use
+[agentic-work](../agentic-work/README.md) and the explicit
+[specialist experiment](../ab/agents-specialists/README.md).
 
 ## How a check identifies nested runs
 

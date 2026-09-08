@@ -44,7 +44,7 @@ struct Arnes: AsyncParsableCommand {
     commandName: "arnes",
     abstract: "Arnes — a model-adaptive agent harness for OpenRouter and OpenAI-compatible gateways.",
     version: arnesVersion,
-    subcommands: [Interactive.self, Chat.self, Do.self, Resume.self, Models.self, Status.self, Providers.self, Runs.self, Sessions.self, Eval.self, Evals.self, Probe.self, Mcp.self, Skills.self, Agents.self, Hooks.self, Trust.self, Doctor.self, Debug.self, ReviewCommand.self, MemoryCommand.self, InitCommand.self],
+    subcommands: [Interactive.self, Chat.self, Do.self, Resume.self, Models.self, Status.self, Providers.self, Runs.self, Sessions.self, Eval.self, Evals.self, Probe.self, Mcp.self, Skills.self, Agents.self, Hooks.self, Trust.self, Doctor.self, Debug.self, ReviewCommand.self, MemoryCommand.self, InitCommand.self, ACPCommand.self],
     defaultSubcommand: Interactive.self)
 }
 
@@ -1649,7 +1649,9 @@ struct Do: AsyncParsableCommand {
       // throw here; the judge's structured request stays dial-less.
       reasoningEffort: (try? parseEffort(effort)) ?? nil,
       candidateAgent: candidateAgent,
-      label: label)
+      label: label,
+      commandDiagnostics: runtime.commandDiagnostics,
+      compaction: runtime.compaction)
     return (runner, notices)
   }
 

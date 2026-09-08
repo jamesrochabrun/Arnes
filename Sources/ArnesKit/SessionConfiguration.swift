@@ -163,6 +163,12 @@ extension Session {
     /// `Verifier.Context.rules` so its untracked-file paste refuses exactly what `read_file`
     /// refuses (S7). Not a permission: a rule only narrows. Carried by `forSubagent`.
     public var pathRules: PathScope.Rules
+    /// Inject a pack directory for isolated evaluations/embedders. nil uses ARNES_PACKS_DIR
+    /// or the user's normal directory. Inherited by nested sessions.
+    public var packsDirectory: URL?
+    /// Opt-in extracted compiler/test diagnostics appended to bash results, under the
+    /// same redaction, scanning and output cap. Does not execute an additional command.
+    public var commandDiagnostics: Bool
 
     public init(
       model: String? = nil,
@@ -199,7 +205,9 @@ extension Session {
       compaction: CompactionPolicy = .default,
       compactionInstructions: String? = nil,
       grants: SessionGrants = SessionGrants(),
-      pathRules: PathScope.Rules = .default)
+      pathRules: PathScope.Rules = .default,
+      packsDirectory: URL? = nil,
+      commandDiagnostics: Bool = false)
     {
       self.model = model ?? provider.defaultModel
       self.fallbackModels = fallbackModels
@@ -236,6 +244,8 @@ extension Session {
       self.compactionInstructions = compactionInstructions
       self.grants = grants
       self.pathRules = pathRules
+      self.packsDirectory = packsDirectory
+      self.commandDiagnostics = commandDiagnostics
     }
 
     /// The configuration for a nested session the task tool spawns: the agent's model, role
@@ -348,7 +358,9 @@ extension Session {
         grants: grants,
         // The same path rules: a nested run's verifier gates its untracked-file paste by the
         // rules the lead's tools run under (S7) — a rule only ever narrows what is read.
-        pathRules: pathRules)
+        pathRules: pathRules,
+        packsDirectory: packsDirectory,
+        commandDiagnostics: commandDiagnostics)
     }
 
     /// The `sessionOrigin` of every nested session. The lead's is the caller's to name

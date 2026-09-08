@@ -1,0 +1,5 @@
+{
+  "edit_file": "Copy old_string exactly from the current read. Replace a complete logical block with enough surrounding text to identify one location. If a match fails, read the named region again before retrying; do not guess whitespace or replace the whole file as a shortcut.",
+  "bash": "Use a bounded command that produces decisive evidence. Check its exit status and relevant output before choosing the next action. Start a background job for a server or long-running process and inspect it with job; do not repeatedly restart it.",
+  "task": "Delegate only independent work with a concrete deliverable and an explicit file scope. Give the worker all necessary context. Keep integration and final verification with the lead."
+}

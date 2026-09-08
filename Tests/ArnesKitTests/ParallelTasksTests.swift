@@ -355,6 +355,34 @@ final class ParallelTasksTests: XCTestCase {
     XCTAssertEqual(order, ["first", "second"], "the released slot is handed to the waiter")
   }
 
+  func testCancelledLimiterWaiterReturnsWithoutWaitingForTheActiveRun() async throws {
+    let limiter = SubagentLimiter(max: 1)
+    let first = await limiter.acquireUnlessCancelled()
+    XCTAssertTrue(first)
+    let queued = Latch()
+    let waiter = Task {
+      await queued.arrive()
+      return await limiter.acquireUnlessCancelled()
+    }
+    await queued.wait(for: 1)
+    waiter.cancel()
+    let cancelled = try await withDeadline(seconds: 2) { await waiter.value }
+    XCTAssertEqual(cancelled, false)
+    // The cancellation did not release the first run's slot. A later waiter still waits.
+    let granted = Latch()
+    let next = Task {
+      let acquired = await limiter.acquireUnlessCancelled()
+      await granted.arrive()
+      return acquired
+    }
+    let count = await granted.count
+    XCTAssertEqual(count, 0)
+    await limiter.release()
+    let nextAcquired = await next.value
+    XCTAssertTrue(nextAcquired)
+    await limiter.release()
+  }
+
   func testSubagentLimiterCapsOverlap() async throws {
     let mock = MockOpenRouterService()
     mock.manifestJSON = manifest()

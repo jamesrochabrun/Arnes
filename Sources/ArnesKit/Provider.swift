@@ -576,6 +576,11 @@ public struct WebConfig: Codable, Sendable, Equatable {
 /// { "compaction": { "threshold": 0.8, "keepRecentToolResults": 6, "clearMinChars": 2000, "maxPerTurn": 2 } }
 /// ```
 public struct CompactionConfig: Codable, Sendable, Equatable {
+  /// Optional estimated-token budget for recent tool results, replacing the fixed count.
+  /// Synthesized optional Codable fields use decodeIfPresent for older configurations.
+  public var keepRecentToolTokens: Int?
+  /// Optional command-evidence appendix during compaction. nil = off.
+  public var preserveCommandEvidence: Bool?
   /// Fraction of the context window at which a turn start summarizes (when clearing alone won't
   /// do) and a step clears mid-turn. nil = 0.8; a value outside (0, 1] reads as the default.
   public var threshold: Double?
@@ -593,13 +598,16 @@ public struct CompactionConfig: Codable, Sendable, Equatable {
 
   public init(
     threshold: Double? = nil, keepRecentToolResults: Int? = nil, clearMinChars: Int? = nil,
-    maxPerTurn: Int? = nil, keepRecentImages: Int? = nil)
+    maxPerTurn: Int? = nil, keepRecentImages: Int? = nil, keepRecentToolTokens: Int? = nil,
+    preserveCommandEvidence: Bool? = nil)
   {
     self.threshold = threshold
     self.keepRecentToolResults = keepRecentToolResults
     self.clearMinChars = clearMinChars
     self.maxPerTurn = maxPerTurn
     self.keepRecentImages = keepRecentImages
+    self.keepRecentToolTokens = keepRecentToolTokens
+    self.preserveCommandEvidence = preserveCommandEvidence
   }
 
   /// The configured values over the defaults (`CompactionPolicy.init` clamps them).
@@ -609,7 +617,9 @@ public struct CompactionConfig: Codable, Sendable, Equatable {
       keepRecentToolResults: keepRecentToolResults ?? CompactionPolicy.defaultKeepRecentToolResults,
       clearMinChars: clearMinChars ?? CompactionPolicy.defaultClearMinChars,
       maxPerTurn: maxPerTurn ?? CompactionPolicy.defaultMaxPerTurn,
-      keepRecentImages: keepRecentImages ?? CompactionPolicy.defaultKeepRecentImages)
+      keepRecentImages: keepRecentImages ?? CompactionPolicy.defaultKeepRecentImages,
+      keepRecentToolTokens: keepRecentToolTokens,
+      preserveCommandEvidence: preserveCommandEvidence ?? false)
   }
 }
 
@@ -623,6 +633,8 @@ public struct CompactionConfig: Codable, Sendable, Equatable {
 /// { "policies": { "environmentContext": false } }
 /// ```
 public struct PoliciesConfig: Codable, Sendable, Equatable {
+  /// Append bounded extracted compiler/test diagnostics to bash results. nil = off.
+  public var commandDiagnostics: Bool?
   /// Whether the `# Environment` section (working directory, platform, date, git snapshot,
   /// run posture) rides the system prompt. nil = on. See `EnvironmentContext`.
   public var environmentContext: Bool?
@@ -667,7 +679,8 @@ public struct PoliciesConfig: Codable, Sendable, Equatable {
     promptCache: PromptCacheConfig? = nil,
     manifestCache: ManifestCacheConfig? = nil,
     adaptiveThink: Bool? = nil,
-    panelOnVerifierFail: Int? = nil)
+    panelOnVerifierFail: Int? = nil,
+    commandDiagnostics: Bool? = nil)
   {
     self.environmentContext = environmentContext
     self.skillListingBytes = skillListingBytes
@@ -677,6 +690,7 @@ public struct PoliciesConfig: Codable, Sendable, Equatable {
     self.manifestCache = manifestCache
     self.adaptiveThink = adaptiveThink
     self.panelOnVerifierFail = panelOnVerifierFail
+    self.commandDiagnostics = commandDiagnostics
   }
 }
 

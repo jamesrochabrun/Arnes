@@ -790,22 +790,43 @@ struct PrefixedPermissions: PermissionDelegate {
 public actor SubagentLimiter {
   private let limit: Int
   private var active = 0
-  private var waiting: [CheckedContinuation<Void, Never>] = []
+  private var waiting: [(id: UUID, continuation: CheckedContinuation<Bool, Never>)] = []
 
   /// - Parameter max: concurrent runs allowed; anything below 1 is treated as 1.
   public init(max: Int) {
     limit = Swift.max(1, max)
   }
 
+  /// The original unconditional acquire/release API. A cancelled caller still owns
+  /// the slot on return, so existing embedders can keep their unconditional release.
   public func acquire() async {
+    guard active >= limit else { active += 1; return }
+    _ = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+      waiting.append((UUID(), continuation))
+    }
+  }
+
+  /// Harness waits can leave the queue on cancellation. False owns no slot and must
+  /// not release one; this is separate from the public unconditional acquire contract.
+  func acquireUnlessCancelled() async -> Bool {
+    guard !Task.isCancelled else { return false }
     guard active >= limit else {
       active += 1
-      return
+      return true
     }
-    await withCheckedContinuation { continuation in
-      waiting.append(continuation)
+    let id = UUID()
+    return await withTaskCancellationHandler {
+      await withCheckedContinuation { continuation in
+        waiting.append((id, continuation))
+      }
+    } onCancel: {
+      Task { await self.cancelWaiter(id) }
     }
-    // Resumed by `release`, which hands its slot over instead of freeing it.
+  }
+
+  private func cancelWaiter(_ id: UUID) {
+    guard let index = waiting.firstIndex(where: { $0.id == id }) else { return }
+    waiting.remove(at: index).continuation.resume(returning: false)
   }
 
   public func release() {
@@ -813,7 +834,7 @@ public actor SubagentLimiter {
       active = Swift.max(0, active - 1)
       return
     }
-    waiting.removeFirst().resume()
+    waiting.removeFirst().continuation.resume(returning: true)
   }
 }
 
@@ -1928,9 +1949,8 @@ public final class TaskTool: EventEmittingTool, PromptContributing, CostReportin
   private func bind(_ child: TaskTool, to session: Session, setup: NestedSetup) {
     child.parentSessionId = session.id
     child.parentModel = { await session.model }
-    let limit = setup.configuration.maxCostUSD
     child.parentBudgetRemaining = {
-      guard let limit else { return nil }
+      guard let limit = await session.currentBudgetUSD else { return nil }
       return max(0, limit - (await session.costUSD))
     }
     child.parentHistory = { (await session.history, await session.compactionSummary) }
@@ -2087,19 +2107,31 @@ public final class TaskTool: EventEmittingTool, PromptContributing, CostReportin
     let session = run.session
     // Over the cap a delegation waits for a slot instead of failing — the model asked for
     // work, not for a scheduling decision.
-    await limiter.acquire()
+    let acquired = await limiter.acquireUnlessCancelled()
     defer {
       let limiter = limiter
-      Task { await limiter.release() }
+      if acquired { Task { await limiter.release() } }
     }
     // Cancelled while parked on the limiter (the turn that delegated has ended): the slot is
     // handed back and no request is spent — nothing started, so there is nothing to record.
-    if Task.isCancelled {
+    if !acquired || Task.isCancelled {
       // Nothing ran in the snapshot; nothing to keep.
       if let isolation = run.isolation { isolation.remove() }
       return RunOutcome(
         report: "subagent '\(agent.name)' cancelled before it started",
         steps: 0, toolCalls: 0, costUSD: 0, partial: false)
+    }
+    // A queued run's prepared ceiling may be stale by the time it owns a slot. Re-read
+    // the lead's remaining allowance before the first request, and only ever tighten it.
+    if let remaining = await parentBudgetRemaining?() {
+      guard remaining > 0 else {
+        if let isolation = run.isolation { isolation.remove() }
+        return RunOutcome(report: "error: budget limit reached — cannot start subagent '\(agent.name)'",
+          steps: 0, toolCalls: 0, costUSD: 0, partial: false)
+      }
+      let spent = await session.costUSD
+      let ceiling = await session.currentBudgetUSD
+      await session.setBudget(Self.tightestBudget(ceiling, spent + remaining))
     }
     beginRun(agent.name)
     defer { endRun(agent.name) }

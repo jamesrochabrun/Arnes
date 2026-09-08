@@ -10,16 +10,33 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v5
+      - name: Select latest Xcode
+        run: sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)/Contents/Developer" && swift --version
       - name: Build and test
-        run: swift test
+        run: |
+          swift build --product arnes --force-resolved-versions
+          swift test --force-resolved-versions
+      - name: Offline executable ACP integration
+        run: python3 scripts/test-acp.py --binary .build/debug/arnes
+      - name: Offline benchmark adapter tests
+        run: python3 -m unittest discover -s benchmarks/terminal-bench -p 'test_*.py'
 
   linux:
     runs-on: ubuntu-latest
-    container: swift:6.0-jammy
+    # The locked dependency manifests require Swift 6.2.
+    container: swift:6.2-jammy
     steps:
       - uses: actions/checkout@v5
+      - name: Install integration test runner
+        run: apt-get update && apt-get install -y python3
       - name: Build and test
-        run: swift test
+        run: |
+          swift build --product arnes --force-resolved-versions
+          swift test --force-resolved-versions
+      - name: Offline executable ACP and subprocess integration
+        run: python3 scripts/test-acp.py --binary .build/debug/arnes
+      - name: Offline benchmark adapter tests
+        run: python3 -m unittest discover -s benchmarks/terminal-bench -p 'test_*.py'
 
   # The release pipeline ships this exact artifact — build it on every push so a
   # broken universal build surfaces here, not at tag time. Mirrors the release
@@ -37,7 +54,7 @@ jobs:
   # broken static build surfaces here, not at tag time.
   linux-static:
     runs-on: ubuntu-latest
-    container: swift:6.0-jammy
+    container: swift:6.2-jammy
     steps:
       - uses: actions/checkout@v5
       - name: Static-stdlib release build

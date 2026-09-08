@@ -59,6 +59,11 @@ struct Eval: AsyncParsableCommand {
   @Flag(help: "Give every trial the task tool with the built-in and user-global subagents (the ones `arnes agents` lists outside a project; no project agents), so a suite like evals/subagents can score delegation. Your SubagentStart/SubagentStop hooks run for each delegation as in `arnes do`. Off by default: the toolset and prompt stay exactly what evals/basics measured.")
   var subagents = false
 
+  @Option(help: ArgumentHelp(
+    "Exact subagent set for every trial: inline JSON or @path (64 KB). No discovered or built-in agents are added. Mutually exclusive with --subagents; [] is an explicit lead-only control.",
+    valueName: "json|@path"))
+  var agents: String?
+
   @Option(help: "Model for tasks that declare a rubric (default: the provider's default model; a task's own rubric.model wins). Equal to the candidate = self-grading, warned.")
   var judge: String?
 
@@ -117,6 +122,53 @@ struct Eval: AsyncParsableCommand {
       throw ValidationError("--label must be 1–40 characters of letters, digits, '.', '_' or '-' (an A/B arm name such as control or no-think).")
     }
     _ = try parseDialect(dialect)
+    _ = try selectedAgents(discover: { [] })
+  }
+
+  /// Exact experimental sets must not depend on personal agent discovery or silently ignored
+  /// guardrails. Keep the existing --subagents discovery behavior when that flag is selected.
+  func selectedAgents(discover: () -> [AgentDefinition] = { AgentLibrary.discover(includeProject: false) }) throws -> [AgentDefinition] {
+    guard let agents else { return subagents ? discover() : [] }
+    guard !subagents else { throw ValidationError("Use --agents or --subagents, not both.") }
+    guard agents.utf8.count <= 65_536 else { throw ValidationError("--agents exceeds 64 KB.") }
+    let json: String
+    if agents.hasPrefix("@") {
+      let path = (String(agents.dropFirst()) as NSString).expandingTildeInPath
+      // Agent files set system instructions. Never follow a replaced leaf, block on a
+      // FIFO, or read an unbounded file just to check its size afterwards.
+      var before = stat()
+      guard lstat(path, &before) == 0, before.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
+            before.st_size <= 65_536 else {
+        throw ValidationError("--agents @file must be a regular file of at most 64 KB (not a symlink).")
+      }
+      let descriptor = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+      guard descriptor >= 0 else { throw ValidationError("--agents: cannot open the file safely.") }
+      let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+      defer { try? handle.close() }
+      var opened = stat()
+      guard fstat(descriptor, &opened) == 0, opened.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
+            opened.st_dev == before.st_dev, opened.st_ino == before.st_ino,
+            let data = try handle.read(upToCount: 65_537), data.count <= 65_536,
+            let text = String(data: data, encoding: .utf8) else {
+        throw ValidationError("--agents: file changed, exceeds 64 KB, or is not UTF-8.")
+      }
+      json = text
+    } else { json = agents }
+    let definitions: [AgentDefinition]
+    do { definitions = try AgentLibrary.parseInline(json: json) }
+    catch { throw ValidationError(String(describing: error)) }
+    guard definitions.count <= 16 else { throw ValidationError("--agents accepts at most 16 definitions for an eval.") }
+    var names = Set<String>()
+    for definition in definitions {
+      guard !definition.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            names.insert(definition.name).inserted else {
+        throw ValidationError("--agents needs nonempty, unique names.")
+      }
+      guard definition.warnings.isEmpty else {
+        throw ValidationError("--agents \(definition.name): \(definition.warnings.joined(separator: "; "))")
+      }
+    }
+    return definitions
   }
 
   /// The `--label` rule: a short word an A/B arm is read back by — `[A-Za-z0-9._-]{1,40}`.
@@ -331,7 +383,7 @@ struct Eval: AsyncParsableCommand {
       environmentContext: runtime.environmentContextEnabled,
       // `--subagents`: the agents a session started here would see minus the project's own
       // (a trial has no project), capped by the same `subagents` config block.
-      subagents: subagents ? AgentLibrary.discover(includeProject: false) : [],
+      subagents: try selectedAgents(),
       subagentDefaults: runtime.subagentDefaults,
       // Trajectories are the point of reading an eval: kept by default, in a store of their
       // own so `arnes sessions` never lists a trial.
@@ -345,7 +397,9 @@ struct Eval: AsyncParsableCommand {
       toolResultGuard: runtime.toolResultGuard,
       // The P1 A/B arm: the flag for this run, or the configured key — both reach every trial.
       adaptiveThink: adaptiveThink || runtime.adaptiveThink,
-      label: label)
+      label: label,
+      commandDiagnostics: runtime.commandDiagnostics,
+      compaction: runtime.compaction)
     let outcomes = await runner.run(
       suite: loaded, models: modelList, trials: trials, dialect: dialectOverride, concurrency: parallel)
     { progress in

@@ -9,6 +9,47 @@ import OpenRouterSwift
 /// the `# Subagents` listing and the `# Delegation` text, the suffix — and the things that must
 /// ride a **user** message instead (notices, the loop guard's nudge, a plan update).
 final class PrefixStabilityTests: XCTestCase {
+  func testActiveTurnDefersPromptDialsAndRefusesModelSwitching() async throws {
+    let root = try tempDirectory("active-dials")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let entered = Latch(), release = Latch()
+    let mock = MockOpenRouterService()
+    mock.manifestJSON = Fixtures.manifest(Fixtures.reasoningManifestModel(id: "test/model"),
+      Fixtures.manifestModel(id: "test/other"))
+    mock.chunkScripts = [
+      [Fixtures.toolCallChunk(id: "r", name: "listing_probe", arguments: #"{"q":"first"}"#)],
+      [Fixtures.textChunk("done")], [Fixtures.textChunk("next turn")],
+    ]
+    mock.streamGate = { _ in
+      await entered.arrive()
+      await release.wait(for: 1)
+    }
+    let session = Session(service: mock, tools: [ListingTool(), ThinkTool()],
+      store: RunRecordStore(url: root.appendingPathComponent("runs.jsonl")),
+      configuration: .init(model: "test/model", extraSystemSections: ["Original section"],
+        reasoningEffort: .high, adaptiveThink: true, packsDirectory: root))
+    let turn = Task { try await Events.drain(await session.send("first")) }
+    await entered.wait(for: 1)
+    do {
+      _ = try await session.setModel("test/other")
+      XCTFail("must not change models during a streaming turn")
+    } catch SessionError.turnInFlight { }
+    await session.setReasoningEffort(nil)
+    await session.setExtraSystemSections(["Next section"])
+    await release.arrive()
+    _ = try await turn.value
+    _ = try await Events.drain(await session.send("second"))
+    let requests = mock.requests.map(Fixtures.jsonValue)
+    XCTAssertEqual(requests.count, 3)
+    XCTAssertEqual(requests[0]["messages"]?.arrayValue?.first, requests[1]["messages"]?.arrayValue?.first)
+    XCTAssertEqual(requests[0]["tools"], requests[1]["tools"])
+    XCTAssertEqual(requests[0]["reasoning"], requests[1]["reasoning"])
+    XCTAssertFalse(mock.requests[1].tools?.contains { $0.function.name == "think" } == true)
+    XCTAssertTrue(mock.requests[2].tools?.contains { $0.function.name == "think" } == true)
+    XCTAssertTrue(mock.requests[2].messages.first?.content?.plainText.contains("Next section") == true)
+    XCTAssertEqual(mock.requests.map(\.model), Array(repeating: "test/model", count: 3))
+  }
+
   private func tempRecordStore() -> RunRecordStore {
     RunRecordStore(url: FileManager.default.temporaryDirectory
       .appendingPathComponent("arnes-prefix-runs-\(UUID().uuidString).jsonl"))

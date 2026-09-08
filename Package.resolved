@@ -230,8 +230,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/jamesrochabrun/SwiftOpenAI",
       "state" : {
-        "revision" : "b61ac3cce8018595412e5aa84275d1253645aab1",
-        "version" : "4.6.0"
+        "revision" : "03360ef74e2eb093de6fdb38240a63c371390782",
+        "version" : "4.6.1"
       }
     }
   ],

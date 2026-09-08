@@ -6,6 +6,38 @@ import OpenRouterSwift
 /// acceptEdits auto-approves in-tree edits, a deny rule refuses, an allow rule skips the
 /// prompt.
 final class SessionPermissionModeTests: XCTestCase {
+  private struct DeferredPermission: PermissionDelegate {
+    let entered: Latch
+    let release: Latch
+    func decide(toolName: String, summary: String, argumentsJSON: String) async -> PermissionDecision {
+      await entered.arrive()
+      await release.wait(for: 1)
+      return .allowAlwaysThisSession
+    }
+  }
+
+  func testNarrowingToPlanWhileApprovalIsPendingRefusesTheStaleAllow() async throws {
+    let root = try tempRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let entered = Latch(), release = Latch(), mock = MockOpenRouterService()
+    mock.manifestJSON = Fixtures.manifest(Fixtures.manifestModel(id: "test/model"))
+    mock.chunkScripts = writeScript("not-allowed.txt")
+    let session = Session(service: mock, tools: [WriteFileTool(root: root)],
+      permissions: DeferredPermission(entered: entered, release: release), store: store(),
+      configuration: .init(model: "test/model", workingDirectory: root, packsDirectory: root))
+    let turn = Task { try await Events.drain(await session.send("write")) }
+    await entered.wait(for: 1)
+    await session.setPermissionMode(.plan)
+    await release.arrive()
+    _ = try await turn.value
+    XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("not-allowed.txt").path))
+    let grants = await session.sessionGrants
+    XCTAssertTrue(grants.isEmpty)
+    let record = await session.lastRecord
+    XCTAssertEqual(record?.deniedCalls, 1)
+    XCTAssertEqual(record?.decisions?.last?.source, .mode)
+  }
+
   private func store() -> RunRecordStore {
     RunRecordStore(url: FileManager.default.temporaryDirectory
       .appendingPathComponent("arnes-mode-runs-\(UUID().uuidString).jsonl"))

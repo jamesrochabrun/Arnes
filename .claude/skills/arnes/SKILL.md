@@ -12,7 +12,27 @@ description: Drive the arnes CLI (model-adaptive agent harness on OpenRouter) �
 selects (see "Providers" below). `arnes providers` shows which provider is active and
 whether its key resolves — run it first when a command fails with a key/provider error,
 and ask the user for the key rather than guessing.
-All commands are safe to run non-interactively **except** bare `arnes` (the REPL), which
+`arnes acp` is an ACP v1 stdio server for editor clients, not a one-shot task runner.
+It accepts `--model`, `--provider`, `--effort`, `--max-steps` (100), `--budget` (a
+session-wide $5 ceiling), and `--state-directory /absolute/path`. That directory holds
+config.json, credentials, packs, manifest/dialect caches, spills, runs and transcripts;
+it replaces ambient config/pack locations and skips personal session-retention sweeps.
+Normal provider environment overrides still apply. Text/resource-link prompts, streamed text/reasoning/plans,
+allow-once/reject-once permissions, cancellation and session close run over JSON-RPC.
+Tool lifecycle updates carry unique invocation IDs, correlated permission prompts and
+bounded scrubbed result excerpts; completion describes the tool, not task correctness.
+MCP stdio servers require startup approval and keep literal environment values; core
+tools retain Arnes's permission floors. No bypass flag, ambient project extensions,
+session loading, file-diff rendering or live terminal-output streaming. Executed turns
+write normal run records/transcripts; EOF and signals clean up jobs and MCP connections.
+Output failure or five seconds of write backpressure also closes the connection and drains
+cleanup. Offline executable integration uses `python3 scripts/test-acp.py --binary
+.build/debug/arnes` with temporary state and a local HTTP fixture; `--transport-only` runs
+the socket-free subset. These tests require no paid calls or personal stores. Cost limits
+are checked against observed usage at step boundaries; in-flight concurrent work can overshoot.
+See `docs/ACP.md` in the Arnes repo. Use an ACP client, not a terminal permission prompt.
+
+All other commands are safe to run non-interactively **except** bare `arnes` (the REPL), which
 prompts for tool permissions — prefer `arnes do` for headless work. Headless `arnes do` is
 **read-only unless `--yes`**: mutations (bash, write_file, edit_file, MCP) and reads outside
 the working directory are denied and the model is told to report instead. Pass `--yes` when
@@ -153,6 +173,12 @@ arnes eval evals/basics -m deepseek -m haiku --compare last:3 --json          # 
   `A-Za-z0-9._-`) tags every row of the run so two arms of one suite × model read apart:
   `arnes evals show --label <arm>`, the `--json` rows' `label`, `arnes evals prune --label <arm>`.
   Never flip a default from one run; `evals/basics` is always the baseline arm.
+  `<family>.tools.json` in the same directory optionally maps tool names to additional
+  guidance strings (up to 2,000 characters each, 64 entries, 64 KiB file). Guidance is appended
+  to the original description, never replaces schemas or permissions, and reloads only at
+  turn boundaries. Invalid/blank entries keep defaults; unknown names create no tools.
+  `evals/ab/packs-tool-guidance/` contains opt-in OpenAI/Anthropic-family proposals, not
+  measured improvements. `arnes debug prompt --json` shows the resolved descriptions.
 - Rows append to `~/.arnes/evals.jsonl` (fields: suite, taskId, model, trial, checkPassed,
   steps, costUSD, durationSeconds, routedModels, dialect, sandboxed, error; on a graded or
   kept trial also rubricScore, rubricPassed, rubricUnknown, rubricNotes, limitsPassed,
@@ -193,7 +219,19 @@ arnes eval evals/basics -m deepseek -m haiku --compare last:3 --json          # 
   trial's end is not the user's turn end) with the trial's temp workdir as `cwd`; the repo's own
   `.arnes/hooks.json` joins only through the same trust gate as `do` (`--trust-project` or a
   remembered `arnes trust`, plus `arnes hooks trust`), with the skip notices on stderr.
-- Trials have no `task` tool unless you pass `--subagents` (then the built-in `general`/`explore`
+- Trials have no `task` tool unless you supply agents. `--agents <json|@path>` loads an exact
+  set without discovered/built-in agents; `[]` is an explicit lead-only control. It is mutually
+  exclusive with `--subagents`; JSON/file input is capped at 64 KB, with at most 16 unique,
+  nonempty names. `@path` must be a regular UTF-8 file, not a symlink or special file.
+  Parser warnings are usage errors, so ignored role guardrails never silently
+  enter an experiment. The existing JSON shape/fields are the same as `do --agents`, but `do`
+  merges whereas eval replaces the set. Experimental bounded investigator/verifier roles are
+  in `evals/ab/agents-specialists/roles.json`; correctness-based tasks in `evals/agentic-work`
+  do not require delegation. The roles inherit model/effort under default subagent config;
+  `subagents.defaultModel` still overrides the inherited model and must be recorded for A/Bs.
+  The verifier runs from a disposable snapshot; file-tool scope and available OS sandbox
+  enforce boundaries, not its prose. Linux still requires external container isolation.
+  Alternatively, pass `--subagents` (then the built-in `general`/`explore`
   and the user's global agents are offered, never a project's, capped by the provider's
   `subagents` config; your `SubagentStart`/`SubagentStop` hooks run for each delegation as in
   `do`). `evals/subagents` needs it: `wide-search-delegates` passes only when the
@@ -202,7 +240,7 @@ arnes eval evals/basics -m deepseek -m haiku --compare last:3 --json          # 
   `noisy-search-delegates` is the harder search (300 notes, forty candidate names, thirty-nine
   withdrawn in other meetings — a grep for the answer's shape returns forty lines, though batch 13
   showed one `grep`/`comm` pipeline settles it, so its row is the shell-solvable baseline);
-  `judgment-search-delegates` is the shell-proof probe: 240 support tickets under `tickets/`, all
+  `judgment-search-delegates` is a search-strategy probe: 240 support tickets under `tickets/`, all
   using cancel-family words, exactly one asking to stop a subscription, no keyword, negation-filter,
   count-per-file or odd-one-out pipeline isolating it (`DelegationProbeTests` runs fourteen and
   pins that none does), the answer its ticket id — the task where handing the reading to
@@ -668,11 +706,33 @@ sections, plus a project's `## Compact instructions` section (AGENTS.md/CLAUDE.m
 instructions. `runs.jsonl` rows gain `toolResultsCleared`. In the REPL, `/compact [model]
 [instructions]` steers one summary: the first word is a model only if it has a `/` or is a
 configured alias, the rest is instructions (`/compact keep every failing test's name`), and the
-line reports ` · N older tool results cleared from requests`. Panels and evals keep the defaults.
+line reports ` · N older tool results cleared from requests`. CLI panels and evals receive
+the configured compaction policy too; their Kit constructors default to the built-in policy.
 
 ```json
 { "compaction": { "threshold": 0.8, "keepRecentToolResults": 6, "clearMinChars": 2000, "maxPerTurn": 2, "keepRecentImages": 1 } }
 ```
+Optional `compaction.keepRecentToolTokens` replaces the recent-result count with an estimated
+token budget (UTF-8 bytes / 4). Positive budgets retain at least the newest result, even if
+oversized; zero retains none unconditionally. Omit the key to preserve count-based behavior.
+It changes only the request view at existing clearing boundaries, not saved transcripts.
+Optional `compaction.preserveCommandEvidence: true` adds the latest four paired bash
+commands and observed output head/tail excerpts to the summarizer's user transcript. Each
+JSON row is bounded to 6,000 bytes; truncation is explicit. It uses guarded history, never
+reads spill files or re-runs commands, and preserves pending/background/refused status as
+observed. Off by default; this helps expose evidence, not guarantee summary fidelity.
+
+**Experimental command diagnostics.** `policies.commandDiagnostics: true` appends bounded
+JSON to observed foreground `bash` results, extracting common compiler/typechecker
+locations, Python lint codes, and test-failure lines. Status is `command_succeeded`,
+`command_failed`, `command_unavailable` (exit 127), `timed_out`, or `cancelled` — never a
+task-verifier verdict. Unknown/unstarted results get no appendix. At most 12 findings,
+96 KB of head/tail input and 2,000 characters per scanned line; truncation flags expose
+scan/count limits. Original output remains and the existing redaction, scan, framing,
+cap/spill and permission paths apply. No additional tool, subprocess or LSP connection;
+background `job` results are unchanged. The key defaults off and reaches normal CLI
+sessions, ACP, subagents, eval trials and panel candidates. Evaluate independently from
+`preserveCommandEvidence` before combining them; neither has live quality evidence yet.
 
 **Untrusted content.** Every tool result is data the model gathered, and the same chokepoint
 treats it so, in a fixed order: **secrets are redacted** first — vendor-shaped keys (`sk-or-v1-…`,

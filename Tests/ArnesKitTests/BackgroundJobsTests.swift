@@ -156,10 +156,10 @@ final class BackgroundJobsTests: XCTestCase {
     let poll = try XCTUnwrap(killed)
     XCTAssertLessThan(Date().timeIntervalSince(started), 10)
     XCTAssertTrue(poll.job.killed)
-    // SIGTERM, shell-style — or 0 when bash reaped both killed sleeps and left `wait` before its
-    // own signal landed (the tree is signaled leaf-first, microseconds apart).
+    // SIGTERM or the bounded SIGKILL escalation, shell-style — or 0 when bash reaped
+    // both killed sleeps and left `wait` before its own signal landed.
     let status = try XCTUnwrap(poll.job.exitStatus)
-    XCTAssertTrue([0, 143].contains(status), "exit \(status)")
+    XCTAssertTrue([0, 137, 143].contains(status), "exit \(status)")
     XCTAssertEqual(poll.job.stateLabel, "exited \(status) (killed)")
     for pid in children {
       let gone = await processGone(pid)
@@ -211,7 +211,7 @@ final class BackgroundJobsTests: XCTestCase {
     let running = await registry.runningCount
     XCTAssertEqual(running, 0)
     for job in await registry.snapshot() {
-      XCTAssertEqual(job.exitStatus, 143, "job \(job.id)")
+      XCTAssertTrue([137, 143].contains(job.exitStatus ?? -1), "job \(job.id)")
       XCTAssertTrue(job.killed)
     }
     let aGone = await processGone(a.pid)
@@ -353,7 +353,7 @@ final class BackgroundJobsTests: XCTestCase {
   func testJobToolRendersATailWithTheOmittedCount() async throws {
     let registry = JobRegistry(logRoot: scratch)
     // Well over the tail: 20 000 bytes of `x` lines.
-    _ = try await registry.start(command: "yes xxxxxxxxx | head -c 20000", cwd: scratch)
+    _ = try await registry.start(command: "awk 'BEGIN { for (i=0; i<2000; i++) print \"xxxxxxxxx\" }'", cwd: scratch)
     let poll = try await awaitPoll { await registry.wait(id: 1, seconds: 15) }
     XCTAssertEqual(poll.newBytes, 20_000)
     XCTAssertEqual(poll.text.count, JobRegistry.tailChars)

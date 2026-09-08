@@ -132,6 +132,10 @@ The CLI and embedders use the same `Session` actor. It serializes conversation s
 tool results while allowing independent tool work and nested sessions to run concurrently.
 Each subagent has its own history, run record, and optional transcript; inherited permissions,
 tools, budgets, and depth limits can narrow the parent's authority.
+Explicit eval agent sets (`--agents <json|@path>`) let role experiments avoid personal
+discovery. The investigator/verifier proposal stays outside built-ins: read-only research
+and snapshot-isolated verification, both bounded and model-inheriting. Its quality probes
+score independent executable outcomes, not whether a subagent was used.
 
 Permission policy and OS containment are separate layers. Interactive mutations normally ask;
 headless `do` is read-only unless `--yes`. The `acceptEdits` and `bypass` modes can approve
@@ -145,6 +149,10 @@ request's view of history while preserving the stored transcript. When more room
 automatic or manual compaction summarizes older turns with task state and file notes.
 System text and tool definitions remain stable between turn-boundary changes, and supported
 providers receive explicit prompt-cache breakpoints. Cached-token usage is recorded.
+Optional token-budgeted retention and a bounded recent-command evidence appendix are
+available as separate context experiments. The latter feeds paired commands and guarded
+output tails to the summarizer without changing its system rubric. Defaults remain unchanged;
+mock compaction/resume regressions verify evidence delivery, not summarization quality.
 
 Before `write_file` or `edit_file`, the harness checkpoints the pre-image. `/rewind` can
 restore files and/or conversation history; `/undo` restores the last turn's checkpointed
@@ -155,6 +163,10 @@ Background shell commands belong to a session's job registry and are read or sto
 `job`. Subprocesses have closed stdin, bounded output, timeouts, environment filtering, and
 process-tree cancellation. Per-project memory is a capped, scanned `MEMORY.md` section;
 writes through the file tools require sensitive approval.
+Opt-in command diagnostics extract bounded compiler, typechecker, lint and test findings
+from foreground bash output through the same result guard. They launch no checks and do
+not turn command exit status into a correctness verdict. CLI eval and panel candidates
+receive the same diagnostics/compaction settings for reproducible comparisons.
 
 ## Integration boundaries
 
@@ -166,8 +178,17 @@ writes through the file tools require sensitive approval.
   prompts, and configured subagents. Panels deliberately omit MCP to keep candidates isolated.
 - **Provider client:** typed API fields belong in OpenRouterSwift. URL rewriting and
   `ProviderTraits` supply gateway-specific behavior in Arnes.
-- **Current interfaces:** terminal CLI and Swift library. Desktop/web clients, editor
-  extensions, ACP, and built-in LSP support are not implemented.
+- **Current interfaces:** terminal CLI, Swift library, and an initial [ACP stdio adapter](docs/ACP.md)
+  over Session with protocol permission replies and cancellation. Desktop/web clients,
+  editor extensions, and built-in LSP support are not implemented. ACP capabilities and
+  integration-test limits are documented separately; the adapter adds no second model loop.
+  An explicit ACP state directory makes executable integration independent of personal
+  stores. Output backpressure has a deadline, shutdown callers share one drain, and
+  cancellation is checked after awaited progress callbacks before a file tool can write.
+  Prompt effort/extra-section changes wait for a turn boundary; model swaps refuse an
+  active turn. Queued specialists can cancel without acquiring a slot and recheck the
+  parent's remaining allowance when admitted. Budgets use observed usage at step boundaries,
+  so already running concurrent work can overshoot; there is no spend-reservation ledger.
 
 ## Evaluation and evidence
 

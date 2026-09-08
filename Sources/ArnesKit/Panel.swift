@@ -104,6 +104,8 @@ public final class PanelRunner: @unchecked Sendable {
   /// `reasoningEffort` dial, is not offered the `think` tool. Live in a panel since batch 14 —
   /// the gate reads `reasoningEffort` below; a panel without a dial keeps the tool.
   private let adaptiveThink: Bool
+  private let commandDiagnostics: Bool
+  private let compaction: CompactionPolicy
   /// The reasoning dial every candidate's session runs with (`do --panel N --effort <level>`);
   /// nil leaves requests exactly as they were. Applied by the session only to models whose
   /// manifest says they support reasoning, like any other run's dial. The judge's structured
@@ -136,7 +138,9 @@ public final class PanelRunner: @unchecked Sendable {
     adaptiveThink: Bool = false,
     reasoningEffort: Reasoning.Effort? = nil,
     candidateAgent: String? = nil,
-    label: String? = nil)
+    label: String? = nil,
+    commandDiagnostics: Bool = false,
+    compaction: CompactionPolicy = .default)
   {
     self.service = service
     self.recordStore = recordStore
@@ -152,6 +156,8 @@ public final class PanelRunner: @unchecked Sendable {
     self.environmentContext = environmentContext
     self.toolResultGuard = toolResultGuard
     self.adaptiveThink = adaptiveThink
+    self.commandDiagnostics = commandDiagnostics
+    self.compaction = compaction
     self.reasoningEffort = reasoningEffort
     self.candidateAgent = candidateAgent
     self.label = label
@@ -287,6 +293,8 @@ public final class PanelRunner: @unchecked Sendable {
       hookPromptRunner: hookPromptRunner,
       toolResultGuard: toolResultGuard)
     configuration.adaptiveThink = adaptiveThink
+    configuration.commandDiagnostics = commandDiagnostics
+    configuration.compaction = compaction
     configuration.agent = candidateAgent
     if environmentContext {
       // The candidate's own block: its snapshot as the root (a copy of the user's tree, git

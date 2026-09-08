@@ -59,6 +59,8 @@ public struct PermissionRequest: Sendable {
   /// would remember as a `Read(<dir>/**)` grant. The interactive prompt shows it so the
   /// user knows what `a` covers; nil for every other call, where `a` keeps its old meaning.
   public var grantScope: String?
+  /// Optional presentation correlation, not a permission grant or a model instruction.
+  public var toolActivityID: String?
 
   public init(
     toolName: String,
@@ -67,7 +69,8 @@ public struct PermissionRequest: Sendable {
     tier: ToolPermission,
     preApproved: Bool = false,
     tainted: Bool = false,
-    grantScope: String? = nil)
+    grantScope: String? = nil,
+    toolActivityID: String? = nil)
   {
     self.toolName = toolName
     self.summary = summary
@@ -76,6 +79,7 @@ public struct PermissionRequest: Sendable {
     self.preApproved = preApproved
     self.tainted = tainted
     self.grantScope = grantScope
+    self.toolActivityID = toolActivityID
   }
 
   /// The `[after untrusted content from …]` note the session prefixed to a tainted call's

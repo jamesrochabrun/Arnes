@@ -322,6 +322,13 @@ committed prompt variants (`packs-think-tool` and `packs-no-s6`, each a `base.md
 the base prompt; `packs-delegate-wide`, a `## Delegation` override per family), the recipe and
 the recorded results; `evals/safety` is the prompt-injection probe and
 `evals/subagents` the delegation one, whose checks read the trial's own `ARNES_SESSION_ID`.
+
+For reproducible role experiments, `eval --agents <json|@path>` supplies an exact agent set
+without built-in or personal definitions; `--agents '[]'` is a lead-only control. This is
+mutually exclusive with the existing `--subagents` discovery flag. The optional
+[investigator/verifier proposal](evals/ab/agents-specialists/README.md) pairs bounded roles
+with [correctness-based tasks](evals/agentic-work/README.md) that do not reward delegation
+counts. No default agents or delegation guidance changed; live A/B evidence is pending.
 You don't even have to write tasks by hand:
 
 ```bash
@@ -720,7 +727,9 @@ ln -s "$(pwd)/.claude/skills/arnes" ~/.claude/skills/arnes
   (user-overridable at `~/.arnes/packs/<family>.md`; a `## Delegation` section there replaces
   the built-in when-to-delegate guidance, which rides the prompt only while subagents are
   available; a `base.md` beside them replaces the base prompt itself, and `ARNES_PACKS_DIR`
-  points a run at another packs directory — the seam an A/B runs a variant through), file,
+  points a run at another packs directory — the seam an A/B runs a variant through;
+  optional `<family>.tools.json` entries append tool guidance without changing schemas or
+  permissions, snapshotted at each turn boundary), file,
   shell, planning, question, and background-job tools, plus capability-gated tools,
   skills, subagents, and any MCP server's tools
   (`~/.arnes/mcp.json`), session transcripts (`~/.arnes/sessions/`), and the `RunRecord`
@@ -831,11 +840,26 @@ ln -s "$(pwd)/.claude/skills/arnes" ~/.claude/skills/arnes
   is told to keep the files touched, the verifying commands, the unresolved errors and the
   current `update_plan` checklist verbatim, and a project's `## Compact instructions` steer it.
   Tune under top-level `"compaction": {"threshold", "keepRecentToolResults", "clearMinChars",
-  "maxPerTurn", "keepRecentImages"}` (the last: `view_image` pictures older than the kept results
+  "maxPerTurn", "keepRecentImages", "keepRecentToolTokens", "preserveCommandEvidence"}`. Optional `keepRecentToolTokens`
+  replaces the fixed result count with an estimated token budget (UTF-8 bytes / 4); a positive
+  budget always keeps the latest result, even if oversized. Omit it for the existing behavior.
+  Optional `preserveCommandEvidence: true` gives the summarizer the latest four paired bash
+  commands and bounded output head/tail excerpts, retaining failure tails that the ordinary
+  transcript preview can omit. It does not re-run commands or assert that work passed.
+  Both options reach CLI sessions, subagents, eval trials and panel candidates.
+  `keepRecentImages` controls `view_image` pictures older than the kept results, which
   are replaced by their caption plus a recall hint, all but the newest one — a screenshot stops
-  riding every later request); `/compact [model] [instructions]` steers one summary by hand. The
+  riding every later request; `/compact [model] [instructions]` steers one summary by hand. The
   REPL also re-reads the project's `MEMORY.md` at every turn start, so a note the model saves
   reaches the next turn's system prompt.
+
+**Experimental command diagnostics.** `"policies": {"commandDiagnostics": true}` appends
+bounded JSON findings to observed foreground `bash` results: common compiler/typechecker
+locations, Python lint codes, and test-failure lines. Exit status remains command status,
+not a task verdict. Original output, permissions, redaction, scanning and output caps still
+apply. This runs no extra checks and is not LSP integration; background `job` polling is
+unchanged. Diagnostics and command-evidence retention are off by default pending paired
+evaluation. See [the experiment controls](benchmarks/terminal-bench/README.md#comparing-changes).
 
 ## Current scope and limitations
 
@@ -846,8 +870,12 @@ on `main`; the release distinction is documented at the top of this README.
 
 - **Platforms:** CLI binaries target macOS and Linux on arm64/x64. OS sandbox enforcement
   is implemented on macOS; a Linux backend remains planned. Windows binaries are not provided.
-- **Interfaces:** a terminal CLI and an embeddable Swift library. There is no bundled
-  desktop/web client, editor extension, ACP server, or built-in LSP integration.
+- **Interfaces:** terminal CLI, embeddable Swift library, and an initial
+  [`arnes acp` stdio adapter](docs/ACP.md) for editor clients. There is no bundled
+  desktop/web client, editor extension, or built-in LSP integration.
+  ACP accepts `--state-directory /absolute/path` to isolate configuration, credentials,
+  packs, caches and records. Cancellation drains records and cleans up session jobs;
+  disconnected or stalled output also closes the connection.
 - **Recovery:** checkpoints cover `write_file` and `edit_file`, not shell edits or commits.
 - **Panels:** explicit panels and verifier-triggered escalation use isolated snapshots.
   `--panel-on-fail` currently requires text output and does not support resumed sessions
@@ -869,9 +897,26 @@ when working on an area; it is the detailed record rather than an onboarding gui
 ```bash
 swift build --product arnes
 swift test
+python3 scripts/test-acp.py --binary .build/debug/arnes
+python3 -m unittest discover -s benchmarks/terminal-bench -p 'test_*.py'
 ```
 
 Tests use mock services and temporary directories; they do not require model API calls.
+The locked dependencies require Swift 6.2 or newer. The Swift suite also needs Python 3
+for its local HTTP regression fixture. Linux source builds require glibc 2.34 or newer
+(the validated Ubuntu 22.04 container uses 2.35). Keep sandbox and loopback access enabled for validation.
+The ACP executable suite starts a loopback HTTP fixture and retains the platform's normal
+sandbox policy. Mac/Linux CI is configured to run it after the Swift suite. A restricted host can run
+`scripts/test-acp.py --transport-only`, but that subset does not validate provider traffic
+or OS confinement. Current results and outstanding platform gates are in
+[docs/VALIDATION.md](docs/VALIDATION.md).
+
+SwiftOpenAI 4.6.1 supplies the Linux transport dependency fix. Normal builds use the
+released version in `Package.resolved`; no sibling checkout is required. For upstream
+transport development, `swift package edit swiftopenai --path ../SwiftOpenAI` enables a
+local override after resolution. Use `swift package unedit swiftopenai` and
+`swift package resolve` to restore the release. No OpenRouterSwift override is required.
+
 For a bug report, include `arnes --version`, OS/architecture, the command or workflow,
 expected versus actual behavior, and a minimal reproduction with credentials removed.
 Report problems or propose changes through [GitHub issues](https://github.com/jamesrochabrun/Arnes/issues).

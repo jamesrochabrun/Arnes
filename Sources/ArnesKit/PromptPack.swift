@@ -31,6 +31,8 @@ public struct PromptPack: Sendable {
   /// built-in text). Never empty. Placed after the tool-contributed sections (the agent
   /// listing) and before the embedder's suffix.
   public let delegation: String
+  /// Loaded once with the prompt at the turn boundary, never re-read between steps.
+  public var toolGuidance = ToolGuidance()
 
   static let basePrompt = """
     You are Arnes, a coding agent. You complete the user's task using the tools provided.
@@ -165,6 +167,7 @@ public struct PromptPack: Sendable {
     let overriddenBase = baseOverride(in: overridesDirectory)
     let base = overriddenBase ?? basePrompt
     let baseOverridden = overriddenBase != nil
+    let guidance = ToolGuidance.load(for: family, in: overridesDirectory)
     let overrideURL = overridesDirectory.appendingPathComponent("\(family.rawValue).md")
     if let override = try? String(contentsOf: overrideURL, encoding: .utf8) {
       // A `## Delegation` section (any level) replaces the delegation body for this family;
@@ -177,7 +180,7 @@ public struct PromptPack: Sendable {
         return PromptPack(
           family: family, text: base + "\n\n" + override,
           baseOverridden: baseOverridden,
-          delegation: defaultDelegation(for: family))
+          delegation: defaultDelegation(for: family), toolGuidance: guidance)
       }
       return PromptPack(
         family: family,
@@ -185,12 +188,12 @@ public struct PromptPack: Sendable {
         baseOverridden: baseOverridden,
         delegation: section.isEmpty
           ? defaultDelegation(for: family)
-          : "# \(delegationHeading)\n\n" + section)
+          : "# \(delegationHeading)\n\n" + section, toolGuidance: guidance)
     }
     let familyText = familyDefaults[family] ?? ""
     let text = familyText.isEmpty ? base : base + "\n\n" + familyText
     return PromptPack(
       family: family, text: text, baseOverridden: baseOverridden,
-      delegation: defaultDelegation(for: family))
+      delegation: defaultDelegation(for: family), toolGuidance: guidance)
   }
 }

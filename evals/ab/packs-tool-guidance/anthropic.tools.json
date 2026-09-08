@@ -1,0 +1,5 @@
+{
+  "edit_file": "Use a small, unique exact-match edit based on the latest read. If matching fails, inspect the current region and include stable surrounding context. After a successful edit, use the returned region and then run the relevant check.",
+  "bash": "Choose the smallest command that tests the current hypothesis. Read the exit status and failure output, then act on that evidence. Use background jobs for persistent processes and poll their existing job instead of launching duplicates.",
+  "task": "Prefer direct work for short tasks. For genuinely independent work, provide the objective, scope, constraints and required evidence in one complete brief. Verify the integrated result yourself."
+}

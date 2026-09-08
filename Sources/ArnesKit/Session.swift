@@ -28,6 +28,7 @@ struct GatedCall: Sendable {
   /// Arguments as the tool will see them (a PreToolUse hook may have rewritten them).
   let argumentsJSON: String
   let callId: String
+  let activityID: String
   /// PreToolUse `additionalContext`, appended to the result the model reads.
   let additionalContext: [String]
   /// The gate's refusal text, or nil when the call may run.
@@ -182,6 +183,23 @@ public actor Session {
   /// grant answered on a nested prompt covers the lead and the sibling agents too.
   private var grants: SessionGrants { configuration.grants }
   private var turnTask: Task<Void, Never>?
+  private var toolActivityObserver: (@Sendable (ToolActivity) async -> Void)?
+
+  /// Set between turns. Delivery is awaited before permission checks so a client sees
+  /// the operation before being asked about it. Observers must return promptly and must
+  /// not wait for this turn to finish. This does not replace the existing AgentEvent stream.
+  public func observeToolActivity(_ observer: (@Sendable (ToolActivity) async -> Void)?) throws {
+    guard turnTask == nil else { throw SessionError.turnInFlight }
+    toolActivityObserver = observer
+  }
+
+  private func toolActivity(_ id: String, name: String, phase: ToolActivity.Phase,
+    preview: String? = nil) async
+  {
+    guard let observer = toolActivityObserver else { return }
+    await observer(ToolActivity(id: id, name: String(SecretScrubber.scrub(name).text.prefix(200)),
+      phase: phase, preview: preview.map { String(SecretScrubber.scrub($0).text.prefix(2_000)) }))
+  }
   /// The index the next turn's record will carry (turns started so far, resumed count
   /// included); the checkpoint store the REPL keeps beside a session is keyed on it.
   public private(set) var turnIndex: Int
@@ -250,6 +268,9 @@ public actor Session {
   /// of the call — per execution, so a tool instance shared with a nested session (every core
   /// tool is) emits into whichever session is running it.
   private let turnSink = EventSinkBox()
+  private var activePromptPack: PromptPack?
+  private var pendingReasoningEffort: Reasoning.Effort??
+  private var pendingExtraSystemSections: [String]?
 
   /// A lock-protected slot for the turn's sink (`turnSink`); a class so the nonisolated tool
   /// path can read what the actor set.
@@ -352,7 +373,7 @@ public actor Session {
     // after `--continue` measure the stubbed request view, not the unstubbed transcript; the
     // first turn start would recompute it anyway (a follow-up flagged by C2).
     clearedBelow = Microcompaction.clearingCutoff(
-      in: history, keepingRecent: configuration.compaction.keepRecentToolResults)
+      in: history, policy: configuration.compaction)
   }
 
   /// The coding toolset bound to the process CWD, unconfined. Everything else builds its
@@ -370,7 +391,7 @@ public actor Session {
   /// consults the catalog (one manifest fetch per process).
   public func renderedSystemPrompt() async throws -> String {
     let profile = try await catalog.profile(for: model)
-    return systemText(pack: PromptPack.load(for: profile.family), profile: profile)
+    return systemText(pack: promptPack(for: profile), profile: profile)
   }
 
   /// Every tool definition in the toolset, in definition order — the toolset, not the
@@ -387,7 +408,7 @@ public actor Session {
   /// list, so a text model's `init.tools` never names `view_image`.
   public func availableToolDefinitions() async throws -> [Tool] {
     let profile = try await catalog.profile(for: model)
-    return requestTools(for: profile)?.map(\.toolDefinition) ?? []
+    return requestTools(for: profile, pack: promptPack(for: profile))?.map(\.toolDefinition) ?? []
   }
 
   /// Runs one turn of the agent loop: appends the user message, streams model output
@@ -490,7 +511,10 @@ public actor Session {
   /// the prompt pack for its family. Returns the profile so callers can warn when the model
   /// doesn't support tools.
   public func setModel(_ slug: String) async throws -> ModelProfile {
+    guard turnTask == nil else { throw SessionError.turnInFlight }
     let profile = try await catalog.profile(for: slug)
+    // Manifest loading suspends this actor; a send may have started in the meantime.
+    guard turnTask == nil else { throw SessionError.turnInFlight }
     if slug != model {
       // Nothing new is persisted: the `model_change` entry records the swap, and
       // `SessionStore.load` applies the same strip when it replays that entry.
@@ -709,7 +733,8 @@ public actor Session {
           .system(prompt),
           .user(Self.renderTranscript(
             dropped, existingSummary: compactionSummary,
-            currentRequest: currentRequest ?? kept.first { $0.role == .user }?.content?.plainText)),
+            currentRequest: currentRequest ?? kept.first { $0.role == .user }?.content?.plainText,
+            includeCommandEvidence: configuration.compaction.preserveCommandEvidence)),
         ]))
     guard let summary = response.choices.first?.message.content, !summary.isEmpty else {
       throw SessionError.compactionFailed
@@ -724,7 +749,7 @@ public actor Session {
     lastPromptTokens = nil // stale until the next request reports usage
     // The kept tail keeps its own last N tool results verbatim; older ones stay stubbed in the
     // request view exactly as they were before the cut (the cutoff maps onto the new indices).
-    clearedBelow = Microcompaction.clearingCutoff(in: history, keepingRecent: configuration.compaction.keepRecentToolResults)
+    clearedBelow = Microcompaction.clearingCutoff(in: history, policy: configuration.compaction)
     persist(.compaction(summary: summary))
     for message in kept {
       persist(TranscriptEntry(message: message, turn: currentTurnTag))
@@ -749,7 +774,7 @@ public actor Session {
   /// it, so a `/btw` or `/context` between turns never stubs the results that are now the most
   /// recent. The one place the two are combined.
   private var effectiveClearingCutoff: Int {
-    min(clearedBelow, Microcompaction.clearingCutoff(in: history, keepingRecent: configuration.compaction.keepRecentToolResults))
+    min(clearedBelow, Microcompaction.clearingCutoff(in: history, policy: configuration.compaction))
   }
 
   /// What the request view clears at the current cutoff (count + freed characters).
@@ -764,7 +789,7 @@ public actor Session {
   /// stubs a turn's requests carry are stable from one step to the next.
   private func advanceClearing() -> Microcompaction.Clearance {
     let before = requestClearance()
-    clearedBelow = Microcompaction.clearingCutoff(in: history, keepingRecent: configuration.compaction.keepRecentToolResults)
+    clearedBelow = Microcompaction.clearingCutoff(in: history, policy: configuration.compaction)
     return requestClearance() - before
   }
 
@@ -858,7 +883,10 @@ public actor Session {
   /// `[files touched]` (the `read_file`/`write_file`/`edit_file` paths, with what was done to
   /// each) and `[current plan]` (the last `update_plan` checklist) — when the dropped messages
   /// carried them (`CompactionRubric`).
-  static func renderTranscript(_ messages: [Message], existingSummary: String?, currentRequest: String? = nil) -> String {
+  static func renderTranscript(
+    _ messages: [Message], existingSummary: String?, currentRequest: String? = nil,
+    includeCommandEvidence: Bool = false) -> String
+  {
     var lines: [String] = []
     if let existingSummary {
       lines.append("[earlier summary]\n\(existingSummary)")
@@ -882,6 +910,9 @@ public actor Session {
     if let plan = CompactionRubric.planSection(in: messages) {
       lines.append(plan)
     }
+    if includeCommandEvidence, let evidence = CommandEvidence.section(in: messages) {
+      lines.append(evidence)
+    }
     return lines.joined(separator: "\n\n")
   }
 
@@ -896,6 +927,15 @@ public actor Session {
 
   private func clearTurnTask() {
     turnTask = nil
+    if let effort = pendingReasoningEffort {
+      reasoningEffortOverride = effort
+      persist(.effortChange(effort))
+      pendingReasoningEffort = nil
+    }
+    if let sections = pendingExtraSystemSections {
+      extraSystemSections = sections
+      pendingExtraSystemSections = nil
+    }
   }
 
   private func runTurn(
@@ -911,7 +951,9 @@ public actor Session {
       continuation.finish(throwing: error)
       return
     }
-    let pack = PromptPack.load(for: profile.family)
+    let pack = promptPack(for: profile)
+    activePromptPack = pack
+    defer { activePromptPack = nil }
 
     // Microcompaction (C2), at the turn boundary: the request view keeps the last N tool results
     // verbatim and stubs older large ones; the cutoff advances here — once per turn, so a turn's
@@ -1490,6 +1532,8 @@ public actor Session {
           // enters history framed when the policy says so; the preview above stays unframed.
           appendToHistory(.tool(framed(output, source: call.name), toolCallId: call.callId))
           answered.insert(call.callId)
+          await toolActivity(call.activityID, name: call.name,
+            phase: outcome == .ok ? .completed : .failed, preview: output)
           // A result the model must see as content (an image): its parts wait for the step's
           // last result, then ride a user message. Asked only of a call that ran.
           if call.refusal == nil,
@@ -1536,7 +1580,9 @@ public actor Session {
           let name = call.function?.name ?? ""
           var argumentsJSON = call.function?.arguments ?? "{}"
           let callId = call.id ?? ""
+          let activityID = UUID().uuidString
           continuation.yield(.toolCall(name: name, arguments: argumentsJSON))
+          await toolActivity(activityID, name: name, phase: .pending)
 
           // PreToolUse hooks run first — before the permission prompt — so a deterministic
           // guardrail can deny (nobody is asked about a call that won't happen), force a
@@ -1578,7 +1624,7 @@ public actor Session {
           } else {
             let gate = await permissionDenial(
               name: name, argumentsJSON: argumentsJSON, callId: callId, turnIndex: record.turnIndex,
-              hookDecision: pre.decision)
+              hookDecision: pre.decision, activityID: activityID)
             for notice in gate.notices {
               continuation.yield(.hookNotice(event: notice.event, output: notice.output))
             }
@@ -1595,6 +1641,7 @@ public actor Session {
             name: name,
             argumentsJSON: argumentsJSON,
             callId: callId,
+            activityID: activityID,
             additionalContext: pre.additionalContext,
             refusal: refusal,
             concurrent: refusal == nil && preflight == nil && isConcurrent(name))
@@ -1607,6 +1654,7 @@ public actor Session {
             // Nothing to run: the error is the result, committed like an executed call's.
             outputs[index] = preflight
           } else if call.concurrent {
+            await toolActivity(activityID, name: name, phase: .running)
             // Dispatched, not awaited: the next call is gated and run while this one works.
             group.addTask { [self] in
               guard !Task.isCancelled else { return (index, nil) }
@@ -1616,6 +1664,7 @@ public actor Session {
               return (index, Task.isCancelled ? nil : output)
             }
           } else {
+            await toolActivity(activityID, name: name, phase: .running)
             outputs[index] = await execute(name: name, argumentsJSON: argumentsJSON)
           }
 
@@ -1645,6 +1694,13 @@ public actor Session {
         }
       }
       await commitReady()
+
+      // Cancelled concurrent calls have no committed result. Close their presentation
+      // lifecycle too; never leave a client showing an operation still running after reply.
+      for call in gated.dropFirst(committed) {
+        await toolActivity(call.activityID, name: call.name, phase: .failed,
+          preview: "Tool call did not finish before the turn ended.")
+      }
 
       if interrupted || Task.isCancelled {
         interrupted = true
@@ -1766,7 +1822,7 @@ public actor Session {
           profile: profile,
           messages: [.system(systemText(pack: pack, profile: profile))] + chatReplayHistory + [.user(Self.structuredFinalPrompt)],
           schema: outputSchema,
-          tools: requestTools(for: profile)?.map(\.toolDefinition),
+          tools: requestTools(for: profile, pack: pack)?.map(\.toolDefinition),
           costOf: { [self] usage in await self.cost(of: usage, model: self.model) })
         // Every attempt is paid for, valid or not.
         record.costUSD += structured.costUSD
@@ -2159,7 +2215,7 @@ public actor Session {
             breakpoint: cacheBreakpoint(profile: profile)),
           reasoning: chatReasoning(profile: profile),
           reasoningEffort: chatReasoningEffort(profile: profile),
-          tools: requestTools(for: profile)?.map(\.toolDefinition),
+          tools: requestTools(for: profile, pack: pack)?.map(\.toolDefinition),
           streamOptions: traits.requestsStreamUsage ? StreamOptions(includeUsage: true) : nil,
           extraBody: fallbackExtraBody)))
     } catch is CancellationError {
@@ -2257,8 +2313,17 @@ public actor Session {
   /// manifest says the model takes no tools (the field is then omitted, exactly as before), else
   /// `availableTools(for:)`, each dialect mapping its own definition shape over it. The one
   /// expression every request builder reads instead of `profile.supportsTools ? tools : nil`.
-  private func requestTools(for profile: ModelProfile) -> [any AgentTool]? {
-    profile.supportsTools ? availableTools(for: profile) : nil
+  private func requestTools(for profile: ModelProfile, pack: PromptPack? = nil) -> [any AgentTool]? {
+    guard profile.supportsTools else { return nil }
+    let available = availableTools(for: profile)
+    guard let pack else { return available }
+    return available.map { pack.toolGuidance.rendering($0) }
+  }
+
+  private func promptPack(for profile: ModelProfile) -> PromptPack {
+    if let activePromptPack, activePromptPack.family == profile.family { return activePromptPack }
+    return PromptPack.load(for: profile.family,
+      overridesDirectory: configuration.packsDirectory ?? PromptPack.overridesDirectory())
   }
 
   /// History as a chat-completions request may carry it. A router that documents replaying
@@ -2422,7 +2487,7 @@ public actor Session {
           maxTokens: shape.maxTokens,
           system: systemText(pack: pack, profile: profile),
           thinking: shape.thinking,
-          tools: requestTools(for: profile).map { MessagesTranslator.tools($0, breakpointOnLast: breakpoint) },
+          tools: requestTools(for: profile, pack: pack).map { MessagesTranslator.tools($0, breakpointOnLast: breakpoint) },
           models: fallbackModelsField,
           extraBody: fallbackExtraBody)))
     } catch is CancellationError {
@@ -2489,7 +2554,7 @@ public actor Session {
           instructions: systemText(pack: pack, profile: profile),
           include: reasoning == nil ? nil : [ResponsesTranslator.encryptedReasoningInclude],
           reasoning: reasoning,
-          tools: requestTools(for: profile)?.map(ResponsesTranslator.tool),
+          tools: requestTools(for: profile, pack: pack)?.map(ResponsesTranslator.tool),
           extraBody: fallbackExtraBody)))
     } catch is CancellationError {
       outcome.interrupted = true
@@ -2713,7 +2778,8 @@ public actor Session {
     argumentsJSON: String,
     callId: String? = nil,
     turnIndex: Int? = nil,
-    hookDecision: HookOutcome.Decision = .none)
+    hookDecision: HookOutcome.Decision = .none,
+    activityID: String? = nil)
     async -> GateOutcome
   {
     guard let tool = tools.first(where: { $0.name == name }) else { return GateOutcome() }
@@ -2855,7 +2921,14 @@ public actor Session {
       // remembered.
       grantScope: taintedCall
         ? nil
-        : outsideReadPath.flatMap { PathScope.readGrantDirectory(forResolvedPath: $0) }))
+        : outsideReadPath.flatMap { PathScope.readGrantDirectory(forResolvedPath: $0) },
+      toolActivityID: activityID))
+    // Permission UI can suspend while the embedder narrows the live mode. A stale
+    // allow (including "always") cannot authorize a mutation after plan mode was set.
+    if permissionMode == .plan, level != .readOnly {
+      let denial = "plan mode was enabled while permission was pending"
+      return GateOutcome(denial: denial, decision: row(.deny, .mode, denial), notices: notices)
+    }
     switch decision {
     case .allow:
       let source: ToolDecision.Source = answeredByHook ? .hook : (approval ?? .rule)
@@ -2959,7 +3032,8 @@ public actor Session {
   public var currentReasoningEffort: Reasoning.Effort? { reasoningEffortOverride }
 
   /// Moves the reasoning-effort dial mid-session (`/effort <level>`; nil = off, so requests go
-  /// out exactly as they would with no dial at all). The next request is the first to carry it.
+  /// out exactly as they would with no dial at all). An active turn keeps its original dial;
+  /// changes made during it take effect at the next turn boundary.
   /// Persisted as an `effort_change` transcript entry when the session is stored — `off` too,
   /// written as the level `off` — so a resume restores the dial as it was left, not as the flag
   /// that started the earlier run had it. (`setPermissionMode` persists nothing: a mode is the
@@ -2971,6 +3045,7 @@ public actor Session {
   /// `currentReasoningEffort` at spawn time, so subagents spawned afterwards run with the new
   /// dial; an unbound one derives theirs from the configuration (`forSubagent`), the launch dial.
   public func setReasoningEffort(_ effort: Reasoning.Effort?) {
+    guard turnTask == nil else { pendingReasoningEffort = .some(effort); return }
     reasoningEffortOverride = effort
     persist(.effortChange(effort))
   }
@@ -3001,11 +3076,12 @@ public actor Session {
   }
 
   /// Replaces the embedder's system-prompt sections (`Configuration.extraSystemSections` seeds
-  /// them) for every request from here on — how the REPL re-renders the `# Environment` block
+  /// them) at the next turn boundary — how the REPL re-renders the `# Environment` block
   /// after `/model`, `/permissions` or `/effort` changed the facts it states, and how a resumed
   /// session sheds the block of the run that wrote its transcript. Same order, same place in the
   /// prompt as the configuration's.
   public func setExtraSystemSections(_ sections: [String]) {
+    guard turnTask == nil else { pendingExtraSystemSections = sections; return }
     extraSystemSections = sections
   }
 
@@ -3038,10 +3114,11 @@ public actor Session {
   /// model's family and context window consults the catalog (one manifest fetch per process).
   public func contextReport() async throws -> ContextReport {
     let profile = try await catalog.profile(for: model)
+    let pack = promptPack(for: profile)
     return ContextReport.build(
-      promptSections: contextSections(pack: PromptPack.load(for: profile.family), profile: profile),
+      promptSections: contextSections(pack: pack, profile: profile),
       history: requestHistory(),
-      tools: toolDefinitions,
+      tools: requestTools(for: profile, pack: pack)?.map(\.toolDefinition) ?? [],
       lastPromptTokens: lastPromptTokens,
       contextLength: profile.contextLength,
       compactionThreshold: compactionThreshold)
@@ -3058,10 +3135,10 @@ public actor Session {
   public func aside(_ text: String) async throws -> (text: String, costUSD: Double) {
     guard turnTask == nil else { throw SessionError.turnInFlight }
     let profile = try await catalog.profile(for: model)
-    let pack = PromptPack.load(for: profile.family)
+    let pack = promptPack(for: profile)
     let messages = [Message.system(systemText(pack: pack, profile: profile))] + chatReplayHistory + [.user(text)]
     let historyCallsTools = messages.contains { !($0.toolCalls ?? []).isEmpty }
-    let definitions = requestTools(for: profile)?.map(\.toolDefinition) ?? []
+    let definitions = requestTools(for: profile, pack: pack)?.map(\.toolDefinition) ?? []
     let sideTools: [Tool]? = historyCallsTools && !definitions.isEmpty ? definitions : nil
     let response = try await service.chatCompletion(
       ChatCompletionRequest(
@@ -3090,7 +3167,10 @@ public actor Session {
       // child task it spawns), which is what lets a tool instance shared with a nested session
       // emit into whichever session is running it (`PlanTool`'s `.planUpdated`).
       return try await ToolEventSink.$current.withValue(turnSink.current) {
-        try await tool.execute(arguments: Self.decodeArguments(argumentsJSON))
+        // An awaited permission/progress callback may have cancelled this turn. Many
+        // file tools complete synchronously and cannot observe cancellation themselves.
+        try Task.checkCancellation()
+        return try await tool.execute(arguments: Self.decodeArguments(argumentsJSON))
       }
     } catch {
       return "error: \(error)"
@@ -3252,6 +3332,12 @@ public actor Session {
     // all (no hooks, no handlers) the runner is still the judge's ledger, so it is drained
     // directly.
     let hookCost = await drainHookSpend()
+    if configuration.commandDiagnostics, name == "bash" {
+      // Scrub before extracting/truncating too: cutting a secret in half can hide its shape
+      // from the normal guard below. The original result still reaches that guard unchanged.
+      let observed = configuration.toolResultGuard.redaction ? SecretScrubber.scrub(output).text : output
+      if let diagnostics = CommandDiagnostics.parse(observed) { output += diagnostics.section }
+    }
     // Redaction first — before the cap writes the spill file, before anything of the result is
     // stored or shown. The hooks above saw the raw output: they are the user's own scripts, run
     // in the user's environment, and a formatter's feedback is redacted with the rest here.

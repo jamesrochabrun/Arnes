@@ -380,7 +380,9 @@ public struct EditFileTool: AgentTool, FileVersionTracking, FileMutatingTool {
     switch Self.apply(edits, to: content) {
     case .success(let result): applied = result
     case .failure(let failure):
-      return Self.applyFailureMessage(failure, count: edits.count, path: path, multi: multi)
+      let message = Self.applyFailureMessage(failure, count: edits.count, path: path, multi: multi)
+      guard case .notFound = failure.reason else { return message }
+      return message + Self.matchRecoveryHint(old: failure.edit.oldString, content: content)
     }
     guard FileIdentity.unchanged(parent.path, since: parentIdentity) else {
       return "error: refused — \(parent.path) is not the directory it was when this edit was "
@@ -452,6 +454,30 @@ public struct EditFileTool: AgentTool, FileVersionTracking, FileMutatingTool {
   }
 
   // MARK: Replacement
+
+  /// Diagnostics only: never normalizes the text used for matching or writes a guessed edit.
+  /// Report locations, not extra file contents; the normal read path supplies fresh evidence.
+  static func matchRecoveryHint(old: String, content: String) -> String {
+    let normalized = content.replacingOccurrences(of: "\r\n", with: "\n")
+    let wanted = old.replacingOccurrences(of: "\r\n", with: "\n")
+    if content.contains("\r\n") != old.contains("\r\n"), normalized.contains(wanted) {
+      return "\nHint: the text matches after normalizing CRLF/LF line endings. Read the file again "
+        + "and preserve its exact line endings; nothing was written."
+    }
+    let anchors = old.components(separatedBy: "\n")
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { $0.count >= 8 && $0.count <= 200 }
+    guard let anchor = anchors.max(by: { $0.count < $1.count }) else { return "" }
+    let matches = content.components(separatedBy: "\n").enumerated().compactMap { index, line in
+      line.trimmingCharacters(in: .whitespacesAndNewlines) == anchor ? index + 1 : nil
+    }
+    guard !matches.isEmpty else { return "" }
+    let locations = matches.prefix(5).map(String.init).joined(separator: ", ")
+    return "\nHint: a line from old_string occurs at on-disk line(s) \(locations)"
+      + (matches.count > 5 ? " (more matches omitted)" : "")
+      + ". Use read_file near that region and copy exact whitespace and surrounding context. "
+      + "This is a location hint, not a verified replacement; nothing was written."
+  }
 
   /// Applies `edits` in order to `content` — each matched against the text as the previous
   /// edits left it, each unique unless it says `replaceAll` — and returns the final text with

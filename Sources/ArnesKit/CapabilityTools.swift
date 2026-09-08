@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 import OpenRouterSwift
 #if canImport(Glibc)
 import Glibc
@@ -373,32 +376,18 @@ public final class URLSessionWebFetchPerformer: NSObject, WebFetchPerformer, URL
     configuration.timeoutIntervalForResource = timeout
     configuration.httpShouldSetCookies = false
     configuration.httpCookieAcceptPolicy = .never
-    let session = URLSession(configuration: configuration)
-    defer { session.invalidateAndCancel() }
     var request = URLRequest(url: url)
     request.httpMethod = "GET"
     request.setValue("text/html, text/plain;q=0.9, application/json;q=0.8, */*;q=0.5", forHTTPHeaderField: "Accept")
     request.setValue("arnes (+https://github.com/jamesrochabrun/Arnes)", forHTTPHeaderField: "User-Agent")
-    let (bytes, response) = try await session.bytes(for: request, delegate: self)
-    var body = Data()
-    body.reserveCapacity(min(maxBytes, 1 << 20))
-    var truncated = false
-    for try await byte in bytes {
-      if body.count >= maxBytes {
-        truncated = true
-        bytes.task.cancel()
-        break
+    let transfer = BoundedWebFetch(maxBytes: maxBytes)
+    return try await withTaskCancellationHandler {
+      try await withCheckedThrowingContinuation { continuation in
+        transfer.start(request, configuration: configuration, continuation: continuation)
       }
-      body.append(byte)
+    } onCancel: {
+      transfer.cancel()
     }
-    guard let http = response as? HTTPURLResponse else {
-      return WebFetchResponse(statusCode: 0, headers: [:], body: body, truncated: truncated)
-    }
-    var headers: [String: String] = [:]
-    for (key, value) in http.allHeaderFields {
-      if let key = key as? String, let value = value as? String { headers[key] = value }
-    }
-    return WebFetchResponse(statusCode: http.statusCode, headers: headers, body: body, truncated: truncated)
   }
 
   public func urlSession(

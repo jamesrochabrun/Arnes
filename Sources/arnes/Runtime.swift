@@ -73,6 +73,7 @@ struct ArnesRuntime {
   /// when the verifier says FAIL and the run passed no `--panel-on-fail`. nil/0/1 = off (the
   /// flag's `0` also switches this off for one run). Read by `Do.panelOnFailArmed`.
   let panelOnVerifierFail: Int?
+  let commandDiagnostics: Bool
 
   var traits: ProviderTraits { provider.traits }
 
@@ -167,7 +168,8 @@ struct ArnesRuntime {
   /// scope, the loop guard, the result guard, the transport policy, the cache policy and the
   /// compaction policy. Panels and evals never call this — their trials truncate without spilling,
   /// so nothing of a trial lands under the user's `~/.arnes` (and they keep the built-in transport
-  /// numbers, the default cache discipline and the built-in compaction numbers).
+  /// numbers and the default cache discipline). Their constructors receive the configured
+  /// compaction policy and command-diagnostics switch separately.
   func applyLimits(to configuration: inout Session.Configuration) {
     configuration.toolResultMaxChars = limits.effectiveToolResultChars
     configuration.spillScope = spillScope
@@ -177,6 +179,7 @@ struct ArnesRuntime {
     configuration.cachePolicy = cachePolicy
     configuration.compaction = compaction
     configuration.adaptiveThink = adaptiveThink
+    configuration.commandDiagnostics = commandDiagnostics
   }
 
   /// The session-wide facts for an environment block: platform and date captured now, plus
@@ -399,33 +402,35 @@ struct ArnesRuntime {
     "⚠ --no-sandbox: this unattended run is NOT confined — bash and the file tools can write "
     + "anywhere the user can"
 
-  static func make(_ options: ProviderOptions) throws -> ArnesRuntime {
-    try make(provider: options.provider)
+  static func make(_ options: ProviderOptions, stateDirectory: URL? = nil) throws -> ArnesRuntime {
+    try make(provider: options.provider, stateDirectory: stateDirectory)
   }
 
-  static func make(provider requested: String?) throws -> ArnesRuntime {
+  static func make(provider requested: String?, stateDirectory: URL? = nil) throws -> ArnesRuntime {
+    let configURL = stateDirectory?.appendingPathComponent("config.json") ?? ArnesConfig.defaultURL
+    let credentialsURL = stateDirectory?.appendingPathComponent("credentials") ?? ProviderResolver.defaultCredentialsURL
     let config: ArnesConfig?
     do {
-      config = try ArnesConfig.load()
+      config = try ArnesConfig.load(from: configURL)
     } catch {
-      throw ValidationError("\(ArnesConfig.defaultURL.path) is invalid: \(error)")
+      throw ValidationError("\(configURL.path) is invalid: \(error)")
     }
     let resolved: ResolvedProvider
     do {
-      resolved = try ProviderResolver.resolve(requested: requested, config: config)
+      resolved = try ProviderResolver.resolve(requested: requested, config: config, credentialsURL: credentialsURL)
     } catch let error as ProviderError {
       throw ValidationError(error.description)
     }
     // Both files hold tokens; Arnes creates its own as 0600, but the user may have
     // written them by hand.
-    for file in [ProviderResolver.defaultCredentialsURL, ArnesConfig.defaultURL, HookConfig.defaultURL]
+    for file in [credentialsURL, configURL, stateDirectory?.appendingPathComponent("hooks.json") ?? HookConfig.defaultURL]
       where SecureFiles.isReadableByOthers(file)
     {
       FileHandle.standardError.write(Data(
         ANSI.yellow("⚠ \(file.path) is readable by other users — chmod 600 it\n").utf8))
     }
     // Retention, when the user asked for it: one sweep per process, named sessions kept.
-    if let days = config?.sessions?.retentionDays, days > 0, !didSweepSessions {
+    if stateDirectory == nil, let days = config?.sessions?.retentionDays, days > 0, !didSweepSessions {
       didSweepSessions = true
       if let pruned = try? SessionStore().prune(olderThan: days), pruned > 0 {
         FileHandle.standardError.write(Data(
@@ -447,9 +452,15 @@ struct ArnesRuntime {
       web: config?.web,
       cachePolicy: config?.policies?.promptCache?.policy ?? .default,
       compaction: config?.compaction?.policy ?? .default,
-      manifestCache: manifestCache(configured: config?.policies?.manifestCache),
+      manifestCache: stateDirectory.map { directory in
+        (config?.policies?.manifestCache ?? ManifestCacheConfig()).policy.map {
+          ManifestCache(directory: directory.appendingPathComponent("models"), policy: $0)
+        }
+      } ?? manifestCache(configured: config?.policies?.manifestCache),
       adaptiveThink: config?.policies?.adaptiveThink ?? true,
-      panelOnVerifierFail: config?.policies?.panelOnVerifierFail)
+      panelOnVerifierFail: config?.policies?.panelOnVerifierFail,
+      commandDiagnostics: config?.policies?.commandDiagnostics ?? false,
+      spillRoot: stateDirectory?.appendingPathComponent("tmp"))
   }
 
   /// The retention sweep runs at most once per process, however many runtimes a command
@@ -479,12 +490,15 @@ struct ArnesRuntime {
     compaction: CompactionPolicy = .default,
     manifestCache: ManifestCache? = nil,
     adaptiveThink: Bool = true,
-    panelOnVerifierFail: Int? = nil)
+    panelOnVerifierFail: Int? = nil,
+    commandDiagnostics: Bool = false,
+    spillRoot: URL? = nil)
   {
     self.provider = provider
     self.manifestCache = manifestCache
     self.adaptiveThink = adaptiveThink
     self.panelOnVerifierFail = panelOnVerifierFail
+    self.commandDiagnostics = commandDiagnostics
     self.shellEnvironmentPolicy = shellEnvironmentPolicy
     self.instructionOptions = instructionOptions
     self.pathPolicy = pathPolicy
@@ -498,7 +512,7 @@ struct ArnesRuntime {
     self.web = web
     self.cachePolicy = cachePolicy
     self.compaction = compaction
-    spillScope = SpillScope(root: Self.spillRoot)
+    spillScope = SpillScope(root: spillRoot ?? Self.spillRoot)
     // A token-minting command means the bearer must be refreshed per request, which the
     // gateway client does even when the root is openrouter.ai itself.
     let tokens = provider.apiKeyCommand.map { BearerTokenSource(command: $0) }

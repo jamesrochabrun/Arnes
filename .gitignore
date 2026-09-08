@@ -2,6 +2,7 @@
 /.build
 xcuserdata/
 .swiftpm/
+/Packages/
 
 # Agent worktrees (Claude Code isolation) live inside the checkout
 .claude/worktrees/

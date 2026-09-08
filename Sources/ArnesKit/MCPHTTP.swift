@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 // MARK: - MCPHTTPRequest
 
@@ -62,7 +65,8 @@ public final class URLSessionMCPPerformer: NSObject, MCPHTTPPerformer, URLSessio
     configuration.timeoutIntervalForRequest = timeout
     configuration.timeoutIntervalForResource = timeout
     configuration.httpShouldSetCookies = false
-    session = URLSession(configuration: configuration)
+    // Corelibs Foundation does not apply per-task redirect delegates consistently.
+    session = URLSession(configuration: configuration, delegate: MCPRedirectBlocker(), delegateQueue: nil)
     super.init()
   }
 
@@ -73,7 +77,7 @@ public final class URLSessionMCPPerformer: NSObject, MCPHTTPPerformer, URLSessio
     for (name, value) in request.headers {
       urlRequest.setValue(value, forHTTPHeaderField: name)
     }
-    let (data, response) = try await session.data(for: urlRequest, delegate: self)
+    let (data, response) = try await session.data(for: urlRequest)
     guard let http = response as? HTTPURLResponse else {
       return MCPHTTPResponse(statusCode: 0, headers: [:], body: data)
     }
@@ -94,6 +98,18 @@ public final class URLSessionMCPPerformer: NSObject, MCPHTTPPerformer, URLSessio
     async -> URLRequest?
   {
     nil // never automatically — the transport checks the host first
+  }
+}
+
+/// Corelibs Foundation invokes the completion-handler delegate requirement on Linux;
+/// implementing only its async convenience overload silently follows redirects there.
+private final class MCPRedirectBlocker: NSObject, URLSessionTaskDelegate, Sendable {
+  func urlSession(
+    _ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+    newRequest request: URLRequest,
+    completionHandler: @escaping @Sendable (URLRequest?) -> Void)
+  {
+    completionHandler(nil)
   }
 }
 

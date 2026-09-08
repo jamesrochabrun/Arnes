@@ -438,20 +438,27 @@ public actor ProcessMCPTransport: MCPTransport {
   private let name: String
   private let config: MCPServerConfig
   private let redactedEnvironmentKeys: Set<String>
+  private let workingDirectory: URL?
+  private let expandEnvironmentVariables: Bool
   private var process: Process?
   private var stdinHandle: FileHandle?
   private var stderrTask: Task<Void, Never>?
+  private var stopTask: Task<Void, Never>?
   /// Tail of the server's stderr, surfaced when startup fails.
   private var stderrTail = ""
 
   public init(
     name: String,
     config: MCPServerConfig,
-    redactingEnvironment redacted: Set<String> = ProcessMCPTransport.defaultRedactedEnvironmentKeys)
+    redactingEnvironment redacted: Set<String> = ProcessMCPTransport.defaultRedactedEnvironmentKeys,
+    workingDirectory: URL? = nil,
+    expandEnvironmentVariables: Bool = true)
   {
     self.name = name
     self.config = config
     redactedEnvironmentKeys = redacted
+    self.workingDirectory = workingDirectory
+    self.expandEnvironmentVariables = expandEnvironmentVariables
   }
 
   /// The child's environment: the parent's, minus redacted secrets, plus the config's
@@ -460,7 +467,7 @@ public actor ProcessMCPTransport: MCPTransport {
   static func environment(
     for config: MCPServerConfig,
     inheriting parent: [String: String],
-    redacting redacted: Set<String>)
+    redacting redacted: Set<String>, expandingValues: Bool = true)
     -> [String: String]
   {
     var environment = parent
@@ -468,7 +475,7 @@ public actor ProcessMCPTransport: MCPTransport {
       environment.removeValue(forKey: key)
     }
     for (key, value) in config.env ?? [:] {
-      environment[key] = expand(value, from: parent)
+      environment[key] = expandingValues ? expand(value, from: parent) : value
     }
     return environment
   }
@@ -479,6 +486,9 @@ public actor ProcessMCPTransport: MCPTransport {
   }
 
   public func start() async throws -> AsyncStream<String> {
+    guard process == nil, stopTask == nil else {
+      throw MCPError.transport(server: name, detail: "transport is already started or stopping")
+    }
     guard let command = config.command, !command.isEmpty else {
       throw MCPError.misconfigured(
         server: name,
@@ -488,10 +498,11 @@ public actor ProcessMCPTransport: MCPTransport {
     // `env` resolves the command via PATH — configs say "npx", not an absolute path.
     process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
     process.arguments = [command] + (config.args ?? [])
+    process.currentDirectoryURL = workingDirectory
     process.environment = Self.environment(
       for: config,
       inheriting: ProcessInfo.processInfo.environment,
-      redacting: redactedEnvironmentKeys)
+      redacting: redactedEnvironmentKeys, expandingValues: expandEnvironmentVariables)
 
     let stdin = Pipe()
     let stdout = Pipe()
@@ -503,9 +514,6 @@ public actor ProcessMCPTransport: MCPTransport {
     self.process = process
     stdinHandle = stdin.fileHandleForWriting
 
-    // Deliberately not `FileHandle.bytes.lines`: AsyncBytes funnels every handle
-    // through one shared IO actor with blocking reads, so a second reader (another
-    // server, or just this server's idle stderr) starves the first one forever.
     let stderrLines = Self.lineStream(from: stderr.fileHandleForReading)
     stderrTask = Task { [weak self] in
       for await line in stderrLines {
@@ -515,24 +523,19 @@ public actor ProcessMCPTransport: MCPTransport {
     return Self.lineStream(from: stdout.fileHandleForReading)
   }
 
-  /// Newline-framed text from a pipe, fed by `readabilityHandler` callbacks (which run
-  /// on a plain dispatch queue and can't starve any actor). Finishes on EOF.
+  /// Drain each readiness notification through EOF or EAGAIN. Corelibs FileHandle's
+  /// readabilityHandler can omit a final EOF callback after delivering the last bytes.
+  /// Nonblocking reads on a serial queue also keep idle servers off cooperative executors.
   private static func lineStream(from handle: FileHandle) -> AsyncStream<String> {
     AsyncStream { continuation in
       let buffer = LineBuffer()
-      handle.readabilityHandler = { handle in
-        let chunk = handle.availableData
-        guard !chunk.isEmpty else {
-          handle.readabilityHandler = nil
-          continuation.finish()
-          return
-        }
-        for line in buffer.split(appending: chunk) {
-          continuation.yield(line)
-        }
-      }
-      continuation.onTermination = { @Sendable _ in
-        handle.readabilityHandler = nil
+      do {
+        let reader = try ProcessPipeReader(handle: handle, onData: { chunk in
+          for line in buffer.split(appending: chunk) { continuation.yield(line) }
+        }, onEOF: { continuation.finish() })
+        continuation.onTermination = { @Sendable _ in reader.stop() }
+      } catch {
+        continuation.finish()
       }
     }
   }
@@ -565,10 +568,28 @@ public actor ProcessMCPTransport: MCPTransport {
   }
 
   public func stop() async {
+    if let stopTask { await stopTask.value; return }
+    let task = Task { await self.stopProcess() }
+    stopTask = task
+    await task.value
+    stopTask = nil
+  }
+
+  private func stopProcess() async {
     stderrTask?.cancel()
+    // EOF can make a wrapper exit and orphan its children. Snapshot them before closing
+    // stdin, while the ancestry still exists, even if the wrapper exits before kill().
+    let descendants = process.map { ShellRunner.ProcessTree.descendants(of: $0.processIdentifier) } ?? []
     try? stdinHandle?.close()
-    if let process, process.isRunning {
-      process.terminate()
+    if let process {
+      let box = ShellRunner.ProcessBox(process: process)
+      box.kill()
+      for _ in 0..<100 where box.isRunning {
+        do { try await Task.sleep(nanoseconds: 20_000_000) } catch { break }
+      }
+      // A server wrapper may exit before a child that ignored SIGTERM. Preserve the
+      // original identity-checked descendant snapshot for the final cleanup pass.
+      box.forceKill(snapshot: descendants)
     }
     process = nil
     stdinHandle = nil

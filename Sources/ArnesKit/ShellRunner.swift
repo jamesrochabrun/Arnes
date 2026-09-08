@@ -5,6 +5,21 @@ import Darwin
 import Glibc
 #endif
 
+/// Lifecycle operations shared by Foundation on Apple platforms and the Linux runner.
+protocol ShellProcess: AnyObject {
+  var processIdentifier: Int32 { get }
+  var isRunning: Bool { get }
+  var terminationStatus: Int32 { get }
+  var terminationReason: Process.TerminationReason { get }
+  func withRunningPID(_ body: (Int32) -> Void)
+}
+
+extension Process: ShellProcess {
+  func withRunningPID(_ body: (Int32) -> Void) {
+    if isRunning { body(processIdentifier) }
+  }
+}
+
 /// Runs a shell command the way an agent tool needs it run.
 ///
 /// - stdin is `/dev/null`: nothing a model launches can sit waiting on the terminal
@@ -165,11 +180,11 @@ enum ShellRunner {
   /// Sendable; every access goes through the lock.
   final class ProcessBox: @unchecked Sendable {
     private let lock = NSLock()
-    private let process: Process
+    private let process: any ShellProcess
     private var _timedOut = false
     private var _cancelled = false
 
-    init(process: Process) { self.process = process }
+    init(process: any ShellProcess) { self.process = process }
 
     var timedOut: Bool {
       get { lock.withLock { _timedOut } }
@@ -213,13 +228,21 @@ enum ShellRunner {
     /// timed-out build doesn't leave its compilers running. Best-effort, like Claude Code's:
     /// a process that forks between the scan and the signal is missed (`ProcessTree`).
     func kill() {
-      let pid = lock.withLock { process.isRunning ? process.processIdentifier : 0 }
-      guard pid > 0 else { return }
-      let tree = ProcessTree.descendants(of: pid)
-      ProcessTree.signal(tree, SIGTERM, verifyingIdentity: false)
-      Foundation.kill(pid, SIGTERM)
+      var tree: [ProcessTree.Entry] = []
+      let signaled = lock.withLock {
+        var signaled = false
+        process.withRunningPID { pid in
+          tree = ProcessTree.descendants(of: pid)
+          ProcessTree.signal(tree, SIGTERM, verifyingIdentity: false)
+          Foundation.kill(pid, SIGTERM)
+          signaled = true
+        }
+        return signaled
+      }
+      guard signaled else { return }
+      let snapshot = tree
       DispatchQueue.global().asyncAfter(deadline: .now() + 2) { [self] in
-        forceKill(snapshot: tree)
+        forceKill(snapshot: snapshot)
       }
     }
 
@@ -228,17 +251,19 @@ enum ShellRunner {
     /// time — so a recycled pid is never signaled). The registry's escalation for a job that
     /// ignored its SIGTERM, and `kill()`'s own two-second follow-up.
     func forceKill(snapshot: [ProcessTree.Entry] = []) {
-      let pid = lock.withLock { process.isRunning ? process.processIdentifier : 0 }
-      var targets = snapshot
-      if pid > 0 { targets += ProcessTree.descendants(of: pid) }
-      ProcessTree.signal(targets, SIGKILL, verifyingIdentity: true)
-      if pid > 0 { Foundation.kill(pid, SIGKILL) }
+      ProcessTree.signal(snapshot, SIGKILL, verifyingIdentity: true)
+      lock.withLock {
+        process.withRunningPID { pid in
+          ProcessTree.signal(ProcessTree.descendants(of: pid), SIGKILL, verifyingIdentity: true)
+          Foundation.kill(pid, SIGKILL)
+        }
+      }
     }
   }
 
   /// A best-effort walk of a process's descendants, for killing what a timed-out or cancelled
-  /// command started. Foundation's `Process` puts no child in its own process group, so the
-  /// shell's pid is all the runner knows; the descendants are enumerated from it — Darwin's
+  /// command started, including descendants that changed process groups. Descendants are
+  /// enumerated from the shell's pid — Darwin's
   /// `proc_listpids(PROC_PPID_ONLY)` (libproc), Linux's `/proc/*/stat` parent ids — and
   /// signaled leaf-first.
   /// Each entry carries the process's start time so a *later* signal (the SIGKILL escalation two
@@ -487,6 +512,7 @@ enum ShellRunner {
     let collector: OutputCollector
     /// The output pipe, or nil when the command writes to a log file instead (a background job).
     let pipe: Pipe?
+    private let reader: ProcessPipeReader?
 
     /// - Parameters:
     ///   - extraEnvironment: variables set on top of the resolved policy (a hook's
@@ -512,7 +538,8 @@ enum ShellRunner {
       logHandle: FileHandle? = nil)
       throws
     {
-      let process = Process()
+      let executable: String
+      let arguments: [String]
       let shellArguments = shell.arguments(for: command)
       if let sandbox {
         // Fail closed: a requested sandbox that the platform can't enforce must not run
@@ -520,15 +547,13 @@ enum ShellRunner {
         guard let wrapped = sandbox.wrappedInvocation(bash: shell.executable, bashArguments: shellArguments) else {
           throw SandboxError.unsupported
         }
-        process.executableURL = URL(fileURLWithPath: wrapped.executable)
-        process.arguments = wrapped.arguments
+        executable = wrapped.executable
+        arguments = wrapped.arguments
       } else {
-        process.executableURL = URL(fileURLWithPath: shell.executable)
-        process.arguments = shellArguments
+        executable = shell.executable
+        arguments = shellArguments
       }
-      if let cwd { process.currentDirectoryURL = cwd }
       let stdinPipe: Pipe? = stdin.map { _ in Pipe() }
-      process.standardInput = stdinPipe ?? FileHandle.nullDevice
       // The provider token (and anything the policy drops) is withheld here so a command
       // can't `echo $OPENROUTER_API_KEY` it back out; the git/pager pins are re-added.
       var environment = policy.resolve()
@@ -536,31 +561,51 @@ enum ShellRunner {
       environment["GIT_PAGER"] = "cat"
       environment["PAGER"] = "cat"
       for (key, value) in extraEnvironment { environment[key] = value }
-      process.environment = environment
 
       let collector = OutputCollector(bounds: outputBounds)
       let pipe: Pipe?
+      let reader: ProcessPipeReader?
+      let output: FileHandle
       if let logHandle {
-        process.standardOutput = logHandle
-        process.standardError = logHandle
+        output = logHandle
         pipe = nil
+        reader = nil
       } else {
         let outputPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = outputPipe
-        outputPipe.fileHandleForReading.readabilityHandler = { handle in
-          let chunk = handle.availableData
-          if chunk.isEmpty {
-            handle.readabilityHandler = nil
-          } else {
-            collector.append(chunk)
-          }
-        }
+        output = outputPipe.fileHandleForWriting
+        reader = try ProcessPipeReader(handle: outputPipe.fileHandleForReading,
+          onData: { collector.append($0) })
         pipe = outputPipe
       }
       let exit = ExitSignal()
-      process.terminationHandler = { _ in exit.fire() }
-      try process.run()
+      let process: any ShellProcess
+      do {
+      #if os(Linux)
+        let nullInput = open("/dev/null", O_RDONLY | O_CLOEXEC)
+        guard nullInput >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        defer { _ = close(nullInput) }
+        process = try LinuxProcess(executable: executable, arguments: arguments, cwd: cwd,
+          environment: environment, input: stdinPipe?.fileHandleForReading.fileDescriptor ?? nullInput,
+          output: output.fileDescriptor, error: output.fileDescriptor, onExit: { exit.fire() })
+        try? stdinPipe?.fileHandleForReading.close()
+        try? pipe?.fileHandleForWriting.close()
+      #else
+        let child = Process()
+        child.executableURL = URL(fileURLWithPath: executable)
+        child.arguments = arguments
+        child.currentDirectoryURL = cwd
+        child.environment = environment
+        child.standardInput = stdinPipe ?? FileHandle.nullDevice
+        child.standardOutput = pipe ?? output
+        child.standardError = pipe ?? output
+        child.terminationHandler = { _ in exit.fire() }
+        try child.run()
+        process = child
+      #endif
+      } catch {
+        reader?.stop()
+        throw error
+      }
       if let stdinPipe, let stdin {
         Self.feed(stdin, into: stdinPipe)
       }
@@ -568,6 +613,7 @@ enum ShellRunner {
       self.exit = exit
       self.collector = collector
       self.pipe = pipe
+      self.reader = reader
     }
 
     /// Writes `data` to the pipe off the caller's thread and closes the write end. A
@@ -588,8 +634,7 @@ enum ShellRunner {
     /// Stops reading (a grandchild holding the pipe open is its own business) and
     /// renders the outcome.
     func finish() -> Outcome {
-      pipe?.fileHandleForReading.readabilityHandler = nil
-      try? pipe?.fileHandleForReading.close()
+      reader?.finish()
       return Outcome(
         exitStatus: box.terminationStatus,
         output: collector.text,

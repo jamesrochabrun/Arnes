@@ -450,7 +450,7 @@ final class ToolLoopHygieneTests: XCTestCase {
 
   func testTwentyMegabytesStayBounded() async {
     let outcome = await ShellRunner.run(
-      "yes | head -c 20000000", cwd: nil, timeoutSeconds: 60,
+      "awk 'BEGIN { for (i=0; i<10000000; i++) print \"y\" }'", cwd: nil, timeoutSeconds: 60,
       outputBounds: ShellRunner.OutputBounds(capChars: 5_000))
     XCTAssertGreaterThan(outcome.truncatedBytes, 19_000_000)
     XCTAssertLessThan(outcome.output.utf8.count, 25_000, "never more than head + tail + marker in memory")

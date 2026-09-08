@@ -7,13 +7,19 @@ import OpenRouterSwift
 /// summarizer runs, how many recent tool results the request-time view keeps verbatim, how small a
 /// result must be to stay whatever its age, and how many emergency summaries one turn may take.
 /// The CLI reads it from the top-level `compaction` block of `~/.arnes/config.json`
-/// (`CompactionConfig`); panels and evals keep the defaults.
+/// (`CompactionConfig`); panels and evals accept the same policy.
 public struct CompactionPolicy: Sendable, Equatable {
   /// Fraction of the model's context window at which a turn start summarizes older turns (after
   /// clearing alone proved insufficient) and a step mid-turn clears older tool results.
   public var threshold: Double
   /// Tool results kept verbatim in the request view — the most recent ones, whatever their size.
   public var keepRecentToolResults: Int
+  /// Opt-in token-budgeted retention instead of a fixed result count. Estimated from
+  /// UTF-8 bytes / 4, not a tokenizer. A positive budget always keeps the latest result.
+  /// nil preserves the historical count-based behavior.
+  public var keepRecentToolTokens: Int?
+  /// Opt-in bounded command/result evidence beside the summarizer's truncated transcript.
+  public var preserveCommandEvidence: Bool
   /// A tool result shorter than this many characters is never cleared: it is cheap to keep and
   /// often the fact the model came for.
   public var clearMinChars: Int
@@ -42,7 +48,9 @@ public struct CompactionPolicy: Sendable, Equatable {
     keepRecentToolResults: Int = CompactionPolicy.defaultKeepRecentToolResults,
     clearMinChars: Int = CompactionPolicy.defaultClearMinChars,
     maxPerTurn: Int = CompactionPolicy.defaultMaxPerTurn,
-    keepRecentImages: Int = CompactionPolicy.defaultKeepRecentImages)
+    keepRecentImages: Int = CompactionPolicy.defaultKeepRecentImages,
+    keepRecentToolTokens: Int? = nil,
+    preserveCommandEvidence: Bool = false)
   {
     // Clamped, never trusted: a threshold outside (0, 1] would summarize every turn or never, a
     // negative count is no count.
@@ -51,6 +59,8 @@ public struct CompactionPolicy: Sendable, Equatable {
     self.clearMinChars = max(0, clearMinChars)
     self.maxPerTurn = max(0, maxPerTurn)
     self.keepRecentImages = max(0, keepRecentImages)
+    self.keepRecentToolTokens = keepRecentToolTokens.map { max(0, $0) }
+    self.preserveCommandEvidence = preserveCommandEvidence
   }
 
   public static let `default` = CompactionPolicy()
@@ -102,6 +112,25 @@ public enum Microcompaction {
     for index in history.indices.reversed() where history[index].role == .tool {
       seen += 1
       if seen == keepRecent { return index }
+    }
+    return 0
+  }
+
+  /// Keep the newest contiguous suffix of tool results within the optional budget.
+  /// Only determines the boundary: message pairing and persisted content stay untouched.
+  public static func clearingCutoff(in history: [Message], policy: CompactionPolicy) -> Int {
+    guard let budget = policy.keepRecentToolTokens else {
+      return clearingCutoff(in: history, keepingRecent: policy.keepRecentToolResults)
+    }
+    guard budget > 0 else { return history.count }
+    var remaining = budget
+    var oldestKept: Int?
+    for index in history.indices.reversed() where history[index].role == .tool {
+      let bytes = history[index].content?.plainText.utf8.count ?? 0
+      let tokens = max(1, bytes / charsPerToken + (bytes % charsPerToken == 0 ? 0 : 1))
+      if let oldestKept, tokens > remaining { return oldestKept }
+      oldestKept = index
+      remaining = max(0, remaining - tokens)
     }
     return 0
   }
