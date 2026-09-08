@@ -17,7 +17,7 @@ final class WebFetchHTTPTests: XCTestCase {
     }
     let script = root.appendingPathComponent("server.py")
     try Self.server.write(to: script, atomically: true, encoding: .utf8)
-    let job = try await jobs.start(command: "python3 \(WorkspaceSnapshot.shellQuote(script.path))", cwd: root)
+    let job = try await jobs.start(command: "python3 -I -u \(WorkspaceSnapshot.shellQuote(script.path))", cwd: root)
     let portFile = root.appendingPathComponent("port")
     for _ in 0..<500 {
       if let port = try? String(contentsOf: portFile, encoding: .utf8), Int(port) != nil {
@@ -28,7 +28,8 @@ final class WebFetchHTTPTests: XCTestCase {
       try await Task.sleep(nanoseconds: 10_000_000)
     }
     let log = await jobs.poll(id: job.id)
-    XCTFail("HTTP fixture failed to listen: \(log?.text ?? "no output")")
+    let status = await jobs.status(id: job.id)
+    XCTFail("HTTP fixture failed to listen (exit \(String(describing: status?.exitStatus))): \(log?.text ?? "no output")")
     throw URLError(.cannotConnectToHost)
   }
 
@@ -107,10 +108,19 @@ final class WebFetchHTTPTests: XCTestCase {
   }
 
   private static let server = #"""
+  print('fixture starting', flush=True)
   import http.server
   import pathlib
+  import socketserver
   import threading
+  print('fixture imports ready', flush=True)
   held = threading.Event()
+  class Server(http.server.ThreadingHTTPServer):
+    def server_bind(self):
+      # A numeric loopback fixture needs no reverse DNS, which HTTPServer normally performs.
+      socketserver.TCPServer.server_bind(self)
+      self.server_name = 'localhost'
+      self.server_port = self.server_address[1]
   class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args):
       pass
@@ -141,8 +151,9 @@ final class WebFetchHTTPTests: XCTestCase {
           self.rfile.read(1)
         except (TimeoutError, ConnectionResetError):
           pass
-  server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
-  pathlib.Path('port').write_text(str(server.server_port))
+  server = Server(('127.0.0.1', 0), Handler)
+  pathlib.Path(__file__).with_name('port').write_text(str(server.server_port))
+  print('fixture listening', flush=True)
   server.serve_forever()
   """#
 }

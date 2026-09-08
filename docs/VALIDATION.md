@@ -49,6 +49,35 @@ Release evidence lives in `.build/validation/release-4.6.1/` (ignored): `resolve
 The released lockfile SHA-256 is
 `e0dbbde78276e6470dfe1a0f60a65f06892b3479e9317999aa716ae7c0c79632`.
 
+### Hosted CI after the main integration
+
+The [first hosted run](https://github.com/jamesrochabrun/Arnes/actions/runs/34190895908)
+at `b58368380ea18cca367845d384d5566571cfa23a` established these additional results:
+
+| Job | Result |
+| --- | --- |
+| Linux x86_64 | Build passes; 1,899 tests, ten platform skips, zero failures (134.762 seconds); executable ACP 11/11 (4.514 seconds); benchmark tests 22/22 (0.043 seconds) |
+| Universal Mac release | arm64 and x86_64 build passes with Swift 6.2.4 |
+| Linux static Swift release | Build passes (553.09 seconds) |
+| npm packaging | Stub packaging and launcher argument/exit forwarding pass; nothing published |
+| Initial hosted Mac suite | 1,891 tests, one expected skip, 11 assertions fail across six tests (321.459 seconds); ACP/benchmark steps do not run after that failure |
+
+The hosted Mac failures exposed test-fixture assumptions. The nested background test now
+holds its leaf until the join event, rather than assuming a fast leaf cannot finish before
+the next step boundary. Provider JSON assertions compare full dummy credential values,
+with a deliberate short substring in the temporary path. The HTTP fixture failed to
+publish its ready file; it now isolates Python startup, writes readiness beside its script,
+reports startup stages on failure, and avoids HTTPServer's unnecessary reverse DNS for a
+numeric loopback address. The executable ACP mock uses the same DNS-free binding.
+These changes do not alter runtime permissions, sandbox behavior or subprocess supervision.
+
+Local follow-up: **37/37 focused Swift tests** (4.793 seconds), and **11/11 executable ACP
+cases** (4.227 seconds) with `socket.getfqdn` replaced by a function that fails any call.
+The subsequent hosted run validates the fixture corrections; the first run above is
+retained as historical evidence, not represented as a passing full workflow. Hosted logs
+are retained with the release evidence as `ci-*.log`, alongside `ci-fixture-focused.log`
+and `acp-without-dns.log`.
+
 ### Prior continuation: both Linux blockers resolved
 
 [SwiftOpenAI PR #199](https://github.com/jamesrochabrun/SwiftOpenAI/pull/199) declares the

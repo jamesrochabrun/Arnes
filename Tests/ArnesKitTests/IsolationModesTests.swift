@@ -930,6 +930,17 @@ final class IsolationModesTests: XCTestCase {
   func testBackgroundGrandchildIsDeliveredToTheNestedSession() async throws {
     let mock = MockOpenRouterService()
     mock.manifestJSON = manifest()
+    // Hold the leaf until the helper joins. An immediately completed leaf can correctly
+    // arrive at the next step boundary, so it cannot prove the turn-end join path.
+    let joining = Latch()
+    let releaseOnTimeout = Task {
+      try? await Task.sleep(nanoseconds: 20_000_000_000)
+      await joining.arrive()
+    }
+    defer { releaseOnTimeout.cancel() }
+    mock.streamGate = { request in
+      if request.model == "leaf/model" { await joining.wait(for: 1) }
+    }
     mock.chunkScriptsByModel = [
       // The helper backgrounds a leaf, replies at once; the join delivers the leaf's report and
       // the helper takes one more step.
@@ -947,9 +958,18 @@ final class IsolationModesTests: XCTestCase {
     tool.parentModel = { "lead/model" }
     tool.parentSessionId = leadId
     let collector = ModeEventCollector()
-    tool.onEvent = { collector.append($0) }
+    tool.onEvent = { event in
+      collector.append(event)
+      if case .subagent("helper", _, .subagentJoining(1)) = event {
+        Task { await joining.arrive() }
+      }
+    }
 
-    let result = try await tool.execute(arguments: ["agent": .string("helper"), "task": .string("go")])
+    let raced = try await withDeadline(seconds: 20) {
+      try await tool.execute(arguments: ["agent": .string("helper"), "task": .string("go")])
+    }
+    await joining.arrive() // Release a parked mock if the operation was cancelled.
+    let result = try XCTUnwrap(raced)
 
     XCTAssertTrue(result.hasPrefix("helper done with leaf"), result)
     let last = try XCTUnwrap(mock.requests.last { $0.model == "sub/model" })

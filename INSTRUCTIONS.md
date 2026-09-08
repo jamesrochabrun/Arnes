@@ -69,8 +69,8 @@ Documentation:
   parses provenance/results, and adjacent Python tests exercise offline orchestration.
 - `ENHANCEMENTS.md` — agentic-quality implementation ledger and verification scope.
 - `docs/VALIDATION.md` — requirement-level evidence audit, verified Mac/Linux arm64 gates,
-  SwiftOpenAI 4.6.1 adoption and prior PR receipts, plus editor and paired-model gates.
-- `Sources/CArnesProcess/` — Linux system-library bridge for posix_spawn, child descriptor
+  SwiftOpenAI 4.6.1 adoption, hosted CI/fixture receipts and prior PR results, plus editor and paired-model gates.
+- `Sources/CArnesProcess/` — Linux C target for posix_spawn, child descriptor
   closure and waitpid status decoding; glibc 2.34+, no additional external package.
 - `docs/ACP.md` — ACP v1 stdio contract, capability limits and integration checks.
 - `.github/workflows/ci.yml` / `release.yml` — Swift 6.2 Linux images for the locked
@@ -6058,5 +6058,14 @@ Bun installs work). `scripts/npm-release.sh` generates the publishable dirs; aut
       Linux arm64 validation covers the identical upstream source. Documentation now names
       the released dependency and separates automated checks from live quality/editor work;
       direct SwiftOpenAI HTTP transport use in Gateway remains the existing boundary.
+- [x] Make hosted validation fixtures deterministic (2026-09-07) — the first main CI run
+      passes Linux x86_64 (1,899 tests, ten skips, zero failures; ACP 11/11; benchmark 22/22),
+      universal Mac, static Swift Linux and npm packaging. Mac exposes a background test
+      assuming a late leaf, a short credential substring also present in a temporary path,
+      and HTTP fixture readiness failures. Gate the leaf on the join event, compare full
+      dummy values, isolate Python startup and remove reverse DNS from numeric loopback
+      mock binding. Startup diagnostics retain failure evidence. Local affected tests pass
+      37/37; actual ACP passes 11/11 with reverse DNS forced to fail. Runtime behavior and
+      permissions are unchanged; docs/VALIDATION.md records the initial CI result separately.
 - [ ] OS sandbox: Linux backend (bwrap/landlock); macOS shipped.
 - [ ] Scoreboard-driven routing defaults; gated pack proposals

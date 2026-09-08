@@ -39,7 +39,11 @@ final class ReasoningShapeCLITests: XCTestCase {
   }
 
   func testProviderRowsCarryTheReasoningShape() throws {
-    let credentials = FileManager.default.temporaryDirectory.appendingPathComponent("arnes-shape-creds-\(UUID().uuidString)")
+    // A short token such as "k1" can occur in an ordinary temporary path. Check complete
+    // fixture values while deliberately keeping that substring in the missing-file path.
+    let credentials = FileManager.default.temporaryDirectory.appendingPathComponent("arnes-shape-creds-k1-\(UUID().uuidString)")
+    let gatewayKey = "fixture-gateway-credential-value"
+    let localKey = "fixture-local-credential-value"
     let providers: [String: ProviderConfig] = [
       "openrouter": .openrouter,
       "gw": ProviderConfig(kind: .litellm, baseURL: "https://gateway.example.com/v1", apiKeyEnv: "GW_TOKEN", defaultModel: "sonnet"),
@@ -49,7 +53,7 @@ final class ReasoningShapeCLITests: XCTestCase {
     ]
     let rows = Providers.rows(
       providers, active: "gw",
-      environment: ["GW_TOKEN": "k1", "LOCAL_TOKEN": "k2"], credentialsURL: credentials)
+      environment: ["GW_TOKEN": gatewayKey, "LOCAL_TOKEN": localKey], credentialsURL: credentials)
     XCTAssertEqual(rows.map(\.name), ["gw", "local", "openrouter"])
     XCTAssertEqual(rows.map(\.reasoningShape), ["openai", "none", "openrouter"])
     XCTAssertEqual(rows[0].resolves, true)
@@ -59,7 +63,8 @@ final class ReasoningShapeCLITests: XCTestCase {
     XCTAssertTrue(line.contains(#""reasoning_shape":"openai""#), line)
     XCTAssertTrue(line.contains(#""reasoning_shape":"none""#), line)
     XCTAssertTrue(line.contains(#""reasoning_shape":"openrouter""#), line)
-    XCTAssertFalse(line.contains("k1"), "never a key")
+    XCTAssertFalse(line.contains(gatewayKey), "never a key")
+    XCTAssertFalse(line.contains(localKey), "never a key")
     // The listing's tail appears only for an override of the kind's default.
     XCTAssertEqual(Providers.reasoningTag(providers["gw"]!), "")
     XCTAssertEqual(Providers.reasoningTag(providers["local"]!), " · reasoning none")

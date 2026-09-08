@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import queue
 import signal
+import socketserver
 import subprocess
 import tempfile
 import threading
@@ -240,7 +241,14 @@ class Provider:
         except (BrokenPipeError, ConnectionResetError):
           pass
 
-    self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    class Server(http.server.ThreadingHTTPServer):
+      def server_bind(self):
+        # Numeric loopback needs no reverse DNS during fixture startup.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name = "localhost"
+        self.server_port = self.server_address[1]
+
+    self.server = Server(("127.0.0.1", 0), Handler)
     self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
     self.thread.start()
     self.url = "http://127.0.0.1:%s/v1" % self.server.server_port
