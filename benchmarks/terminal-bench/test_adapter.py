@@ -78,6 +78,26 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
     status = json.loads((Path(self.directory.name) / "arnes-status.json").read_text())
     self.assertEqual(status["classification"], "installation_error")
 
+  async def test_install_capability_check_consumes_help_under_harbor_pipefail(self):
+    with patch.dict("os.environ", self.environment, clear=True):
+      await self.agent.install(None)
+    root = Path(self.directory.name)
+    binary = root / "help-fixture"
+    binary.write_text(f"#!{sys.executable}\n" + """import os
+os.write(1, b'--keep-alive\\n')
+for _ in range(1024):
+  os.write(1, b'additional help text ' * 1024 + b'\\n')
+""")
+    binary.chmod(0o700)
+    # Harbor's installed-agent helper enables pipefail. A grep that exits at its first
+    # match breaks the producer's later writes and incorrectly fails installation.
+    command = self.commands[0]
+    check = command[command.index("/usr/local/bin/arnes do --help"):]
+    check = check.replace("/usr/local/bin/arnes", shlex.quote(str(binary)))
+    completed = subprocess.run(["bash", "-o", "pipefail", "-c", check],
+      capture_output=True, text=True, timeout=10)
+    self.assertEqual(completed.returncode, 0, completed.stderr)
+
   async def test_run_captures_status_and_uses_session_transcript(self):
     self.agent.arnes_config = BenchmarkConfig.from_environment(self.environment)
     self.agent.arnes_packs = {"other.tools.json": '{"bash":"Do not evaluate $(anything)."}'}

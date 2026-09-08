@@ -64,7 +64,7 @@ class ArnesAgent(BaseInstalledAgent):
         f"printf '%s  %s\\n' {shlex.quote(config.binary_sha256)} \"$candidate\" | sha256sum -c -; "
         "install -m 755 \"$candidate\" /usr/local/bin/arnes; "
         "/usr/local/bin/arnes --version; "
-        "/usr/local/bin/arnes do --help | grep -q -- --keep-alive || "
+        "/usr/local/bin/arnes do --help | grep -- --keep-alive >/dev/null || "
         "{ echo 'The pinned binary must support arnes do --keep-alive' >&2; exit 1; }"
       ))
     except Exception:

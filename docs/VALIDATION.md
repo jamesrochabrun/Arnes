@@ -8,7 +8,7 @@ or approval to promote experimental defaults. See [the implementation ledger](..
 
 | Requirement | Current implementation and direct checks | Still unproven |
 | --- | --- | --- |
-| Reproducible Terminal-Bench | [Adapter and contract tests](../benchmarks/terminal-bench/): 26 offline Python tests; actual Harbor 0.16.1 installation and human-operated task trials; Linux CLI fixture verifies transcript capture, task permissions and bounded service lifetime | Corrected-adapter task reruns and held-out model-quality evaluation |
+| Reproducible Terminal-Bench | [Adapter and contract tests](../benchmarks/terminal-bench/): 27 offline Python tests; actual Harbor 0.16.1 installation and human-operated task trials; Linux CLI fixture verifies transcript capture, task permissions and bounded service lifetime | Corrected-adapter task reruns and held-out model-quality evaluation |
 | Model-adaptive prompts and tool descriptions | [ToolGuidanceTests](../Tests/ArnesKitTests/ToolGuidanceTests.swift) exercises actual Chat, Messages and Responses requests, forced Chat, model/family switching, capability gating, unchanged schemas and stable per-turn overrides. [PrefixStabilityTests](../Tests/ArnesKitTests/PrefixStabilityTests.swift) covers deferred effort/system-section changes and rejected active-turn model swaps | Real provider acceptance and independently measured benefit for each opt-in family proposal |
 | Editing recovery | [EditRecoveryTests](../Tests/ArnesKitTests/EditRecoveryTests.swift) runs failed exact edit → reread → successful exact edit through Session over a real CRLF file, with error accounting and proof the failed edit wrote nothing. Location hints do not expose extra contents. Existing stale-read/checkpoint tests remain in the full suite | Whether the guidance reduces retries on development and held-out tasks |
 | Long-task context | [TokenRetentionTests](../Tests/ArnesKitTests/TokenRetentionTests.swift) and [CommandEvidenceTests](../Tests/ArnesKitTests/CommandEvidenceTests.swift): optional estimated-token retention, bounded paired command evidence, clearing without deleting stored history, compaction and resume | Whether a real summarizer preserves objectives, constraints, edits and verification evidence; the integration test deliberately scripts its summary |
@@ -47,12 +47,20 @@ Neither fixture proves that the three affected tasks now pass; those reruns rema
 human-operated step with the same model, effort and task budgets.
 
 Local Mac validation: 1,894 Swift tests, one expected skip, zero failures; the additional
-cancelled-waiter cleanup check passes. All 26 Python adapter/report tests and 11 executable
+cancelled-waiter cleanup check passes. All 27 Python adapter/report tests and 11 executable
 ACP cases pass. The Linux arm64 static Swift release build succeeds, and its full suite
 passes 1,902 tests with ten platform skips and zero failures. Hosted CI remains a separate
 check of the pushed revision. The corrected binary also passes Harbor 0.16.1 installation
 on git-multibranch, kv-store-grpc and build-pmars: three completed setups, zero errors,
 no model or task-verifier execution. No dependency change is needed for these corrections.
+
+A synthetic trial through Harbor's actual Docker agent/verifier phases exposed one more
+installation issue: the help probe's early-exiting grep could break its producer under
+Harbor's `pipefail`. The corrected probe consumes all help output; a regression reproduces
+the old failure. The full synthetic trial then passes 6/6 verifier checks with four scripted
+loopback responses, a reachable managed HTTP service after handoff, readable task files,
+private evidence and a retained transcript. No external model is called. Harbor removes
+the container afterward. This is integration validation, not a Terminal-Bench task score.
 
 ## Platform validation on 2026-09-07
 

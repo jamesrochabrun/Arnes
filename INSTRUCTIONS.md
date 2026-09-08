@@ -6122,5 +6122,14 @@ Bun installs work). `scripts/npm-release.sh` generates the publishable dirs; aut
       Add that fixture to Linux CI. The rebuilt Linux binary passes Harbor 0.16.1
       installation-only checks on all three affected tasks with zero errors and no model
       calls. Corrected model-quality task reruns remain human-operated.
+- [x] Consume installer help under Harbor pipefail (2026-09-08) — Harbor's installed-agent
+      helper enables pipefail. An early-exiting grep could close the help producer's pipe
+      and reject a valid binary; consume the full output while checking --keep-alive.
+      A large-output producer regression fails with the old probe and passes with the
+      correction. All 27 offline Python checks pass on Mac and Linux. A synthetic full
+      Harbor 0.16.1 trial now passes all six independent verifier checks, including HTTP
+      reachability after Arnes's completed result, service-user file access and transcript
+      capture. It uses four scripted loopback responses and zero external model calls;
+      the task container is removed after verification. Model-quality reruns remain separate.
 - [ ] OS sandbox: Linux backend (bwrap/landlock); macOS shipped.
 - [ ] Scoreboard-driven routing defaults; gated pack proposals
