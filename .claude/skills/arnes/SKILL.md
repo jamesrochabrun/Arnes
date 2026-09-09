@@ -285,6 +285,7 @@ arnes do "..." --yes --output-format stream-json [--include-partial]  # one JSON
 arnes do "..." --yes --output-last-message /tmp/answer.md         # also write the final assistant message to a file (atomic)
 arnes do "..." --yes --output-schema ./answer.schema.json          # final answer as JSON matching the schema (file or inline {…}); envelope's structured_output; exit 3 if it never validates
 arnes do "..." --yes --max-steps 12 --timeout 300                 # caps: model steps (default unlimited) and wall-clock seconds
+arnes do "..." --yes --timeout 900 --time-aware --max-response-tokens 8192  # opt-in time-budget experiment; defaults remain off/unset
 arnes do "start the service" --yes --output-format stream-json --keep-alive 600  # external checks after the result
 arnes do "..." --yes --bare                                       # reproducible CI run: no MCP, skills, subagents, hooks, instruction files or memory
 arnes do "..." --yes --no-memory                                  # skip the project's memory (~/.arnes/memory/<project>/MEMORY.md) — see "Memory"
@@ -305,6 +306,17 @@ arnes do "just answer" --allowed-tools ""                         # no tools at 
 arnes --agent reviewer --allowed-tools Read,Grep                  # the REPL takes the same lead-shape flags (--agent/--agents/--allowed-tools/
                                                                   #   --disallowed-tools/--append-system-prompt[-file]); the banner and /status name the agent
 ```
+
+**Time-budget experiment.** `--time-aware` requires a positive finite `--timeout` and adds
+remaining-time notices before the first request and at 50%, 25%, 10% and zero remaining,
+at request boundaries only. The timeout still interrupts the run. `--max-response-tokens`
+is a positive ceiling on each main-loop response, including reasoning and tool arguments;
+it is bounded by the manifest's output ceiling. It is not a response-duration timer, does
+not cover compaction/verifier/hook side requests, and can stop a run as `truncated` after
+the existing one-continuation allowance. Incomplete tool calls never execute. Both controls
+are inherited by subagents, which share the parent's clock; a resumed CLI run gets a fresh
+clock. Neither flag combines with `--panel`. Defaults remain off/unset. Prompt changes stay
+separate proposals; see `evals/ab/time-budget.md`. Live model-quality trials are human-run.
 
 **Session continuation.** `--resume <id|prefix|name>` (see `arnes sessions`) and `--continue`
 (the most recent) run the task as the saved session's next turn and append to its transcript —

@@ -56,10 +56,25 @@ class BenchmarkContractTests(unittest.TestCase):
 
   def test_invalid_experiment_settings_are_not_silently_coerced(self):
     for key, value in [("ARNES_COMMAND_DIAGNOSTICS", "yes"),
+      ("ARNES_TIME_AWARE", "yes"), ("ARNES_MAX_RESPONSE_TOKENS", "0"),
+      ("ARNES_MAX_RESPONSE_TOKENS", "NaN"),
       ("ARNES_PRESERVE_COMMAND_EVIDENCE", "1"), ("ARNES_KEEP_RECENT_TOOL_TOKENS", "-1"),
       ("ARNES_KEEP_RECENT_TOOL_TOKENS", "NaN")]:
       with self.subTest(key=key, value=value), self.assertRaises(ValueError):
         BenchmarkConfig.from_environment(dict(self.environment(), **{key: value}))
+
+  def test_time_experiment_flags_and_provenance(self):
+    base = BenchmarkConfig.from_environment(self.environment())
+    self.assertNotIn("--time-aware", base.command("go", "session"))
+    self.assertNotIn("--max-response-tokens", base.command("go", "session"))
+    arm = BenchmarkConfig.from_environment(self.environment(
+      ARNES_TIME_AWARE="true", ARNES_MAX_RESPONSE_TOKENS="8192"))
+    args = shlex.split(arm.command("go", "session"))
+    self.assertIn("--time-aware", args)
+    self.assertEqual(args[args.index("--max-response-tokens") + 1], "8192")
+    self.assertTrue(arm.provenance()["time_aware"])
+    self.assertEqual(arm.provenance()["max_response_tokens"], 8192)
+    self.assertEqual(arm.provenance()["schema_version"], 4)
 
   def test_instruction_is_one_literal_argument(self):
     instruction = "fix 'it'; $(touch /tmp/not-executed)\n--help"

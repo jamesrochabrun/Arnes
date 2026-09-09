@@ -349,6 +349,8 @@ final class HeadlessOutputTests: XCTestCase {
     XCTAssertNil(command.outputLastMessage)
     XCTAssertNil(command.maxSteps)
     XCTAssertNil(command.timeout)
+    XCTAssertFalse(command.timeAware)
+    XCTAssertNil(command.maxResponseTokens)
     XCTAssertNil(command.workingDirectoryPath)
     // The task is optional now (stdin can carry it) — parsing without one still succeeds.
     XCTAssertNil(try Do.parse([]).task)
@@ -361,6 +363,17 @@ final class HeadlessOutputTests: XCTestCase {
     try? "x".write(to: file, atomically: true, encoding: .utf8)
     defer { try? FileManager.default.removeItem(at: file) }
     XCTAssertThrowsError(try Do.changeDirectory(to: file.path))
+  }
+
+  func testTimeExperimentFlagsValidateBeforeRunning() throws {
+    let command = try Do.parse(["go", "--timeout", "900", "--time-aware", "--max-response-tokens", "8192"])
+    XCTAssertTrue(command.timeAware)
+    XCTAssertEqual(command.maxResponseTokens, 8192)
+    for args in [["--time-aware"], ["--max-response-tokens", "0"],
+      ["--timeout", "nan"], ["--timeout", "inf"], ["--timeout", "1e99"],
+      ["--max-response-tokens", "8192", "--panel", "test/a,test/b"]] {
+      XCTAssertThrowsError(try Do.parse(["go"] + args), args.joined(separator: " "))
+    }
   }
 
   func testWriteLastMessageWritesTheTextAtomically() throws {

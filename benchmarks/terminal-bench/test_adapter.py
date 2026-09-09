@@ -98,6 +98,23 @@ for _ in range(1024):
       capture_output=True, text=True, timeout=10)
     self.assertEqual(completed.returncode, 0, completed.stderr)
 
+  async def test_enabled_time_experiments_refuse_an_older_binary(self):
+    with patch.dict("os.environ", dict(self.environment,
+      ARNES_TIME_AWARE="true", ARNES_MAX_RESPONSE_TOKENS="8192"), clear=True):
+      await self.agent.install(None)
+    command = self.commands[0]
+    check = command[command.index("/usr/local/bin/arnes do --help"):]
+    binary = Path(self.directory.name) / "help-fixture"
+    binary.write_text("#!/bin/sh\nprintf '%s\\n' --keep-alive\n")
+    binary.chmod(0o700)
+    check = check.replace("/usr/local/bin/arnes", shlex.quote(str(binary)))
+    rejected = subprocess.run(["bash", "-o", "pipefail", "-c", check], capture_output=True, text=True)
+    self.assertNotEqual(rejected.returncode, 0)
+    self.assertIn("--time-aware", rejected.stderr)
+    binary.write_text("#!/bin/sh\nprintf '%s\\n' --keep-alive --time-aware --max-response-tokens\n")
+    accepted = subprocess.run(["bash", "-o", "pipefail", "-c", check], capture_output=True, text=True)
+    self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
   async def test_run_captures_status_and_uses_session_transcript(self):
     self.agent.arnes_config = BenchmarkConfig.from_environment(self.environment)
     self.agent.arnes_packs = {"other.tools.json": '{"bash":"Do not evaluate $(anything)."}'}

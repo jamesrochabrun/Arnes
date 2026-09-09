@@ -169,6 +169,13 @@ extension Session {
     /// Opt-in extracted compiler/test diagnostics appended to bash results, under the
     /// same redaction, scanning and output cap. Does not execute an additional command.
     public var commandDiagnostics: Bool
+    /// Opt-in ceiling for each main-loop response, including reasoning and tool arguments.
+    /// The provider enforces it; truncated calls follow the existing bounded recovery path.
+    /// nil leaves the request unchanged. This is not a wall-clock or total-run token limit.
+    public var maxResponseTokens: Int?
+    /// Opt-in time notices at request boundaries. The caller enforces the actual deadline.
+    /// The same clock is inherited by subagents; their allowance never starts over.
+    public var timeBudget: RunTimeBudget?
 
     public init(
       model: String? = nil,
@@ -207,7 +214,9 @@ extension Session {
       grants: SessionGrants = SessionGrants(),
       pathRules: PathScope.Rules = .default,
       packsDirectory: URL? = nil,
-      commandDiagnostics: Bool = false)
+      commandDiagnostics: Bool = false,
+      maxResponseTokens: Int? = nil,
+      timeBudget: RunTimeBudget? = nil)
     {
       self.model = model ?? provider.defaultModel
       self.fallbackModels = fallbackModels
@@ -246,6 +255,8 @@ extension Session {
       self.pathRules = pathRules
       self.packsDirectory = packsDirectory
       self.commandDiagnostics = commandDiagnostics
+      self.maxResponseTokens = maxResponseTokens
+      self.timeBudget = timeBudget
     }
 
     /// The configuration for a nested session the task tool spawns: the agent's model, role
@@ -360,7 +371,9 @@ extension Session {
         // rules the lead's tools run under (S7) — a rule only ever narrows what is read.
         pathRules: pathRules,
         packsDirectory: packsDirectory,
-        commandDiagnostics: commandDiagnostics)
+        commandDiagnostics: commandDiagnostics,
+        maxResponseTokens: maxResponseTokens,
+        timeBudget: timeBudget)
     }
 
     /// The `sessionOrigin` of every nested session. The lead's is the caller's to name

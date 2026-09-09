@@ -210,6 +210,12 @@ struct Do: AsyncParsableCommand {
   @Option(help: "Wall-clock limit in seconds. At the deadline the run is interrupted (its record says interrupted) and reported as stop_reason timeout, exit 3.")
   var timeout: Double?
 
+  @Flag(help: "Experimental: tell the model the remaining --timeout at request boundaries. Requires --timeout; does not interrupt an individual response early.")
+  var timeAware = false
+
+  @Option(help: "Experimental: cap tokens per main-loop response, including reasoning and tool arguments. A provider output limit, not a timer. Default unset.")
+  var maxResponseTokens: Int?
+
   @Option(help: "Keep a completed session and its managed services alive for this many seconds after emitting the result (0...3600, default 0). For external verifiers; no further agent steps. SIGINT/SIGTERM closes it early. Not with --panel or --verify.")
   var keepAlive: Int = 0
 
@@ -323,8 +329,15 @@ struct Do: AsyncParsableCommand {
     if let maxSteps, maxSteps < 1 {
       throw ValidationError("--max-steps must be at least 1.")
     }
-    if let timeout, timeout <= 0 {
-      throw ValidationError("--timeout must be a positive number of seconds.")
+    if let timeout, !timeout.isFinite || timeout <= 0 || timeout >= Double(UInt64.max) / 1_000_000_000 {
+      throw ValidationError("--timeout must be positive, finite and within the timer's supported range.")
+    }
+    if timeAware, timeout == nil { throw ValidationError("--time-aware requires --timeout.") }
+    if let maxResponseTokens, maxResponseTokens < 1 {
+      throw ValidationError("--max-response-tokens must be at least 1.")
+    }
+    if panel != nil, timeAware || maxResponseTokens != nil {
+      throw ValidationError("--time-aware and --max-response-tokens do not combine with --panel.")
     }
     // Session continuation: one way to name the session, a fork needs one, and a panel is
     // N throwaway candidate runs — not a session's next turn.
@@ -689,6 +702,9 @@ struct Do: AsyncParsableCommand {
       outputSchema: try Self.loadOutputSchema(outputSchema))
     // `limits`: the tool-result cap (spilled under ~/.arnes/tmp/<session>), the loop guard.
     runtime.applyLimits(to: &configuration)
+    let timeBudget = timeAware ? timeout.map { RunTimeBudget(seconds: $0) } : nil
+    configuration.timeBudget = timeBudget
+    configuration.maxResponseTokens = maxResponseTokens
     // A project's `## Compact instructions` steer every compaction's summarizer (C2).
     configuration.compactionInstructions = instructions?.compactInstructions
     configuration.pathRules = pathRules
@@ -879,6 +895,7 @@ struct Do: AsyncParsableCommand {
     // alias reached the gateway as an invalid model name and ended the run `error` after the work.
     let verifierModel = verify.map { runtime.provider.resolveAlias($0) }
     let dialectOverride = try parseDialect(dialect)
+    timeBudget?.start()
     let raced = await Self.race(
       agent: agent, timeout: timeout,
       run: {

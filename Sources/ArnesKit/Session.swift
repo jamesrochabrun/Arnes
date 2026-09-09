@@ -1104,6 +1104,7 @@ public actor Session {
     /// said — mid-turn relief's bounds (C2).
     var emergencyCompactions = 0
     var contextWarned = false
+    var timeNotices = TimeBudgetNotices()
 
     loop: while stepsThisRun < maxStepsPerTurn {
       stepsThisRun += 1
@@ -1115,6 +1116,11 @@ public actor Session {
         record.stopReason = .budget
         continuation.yield(.budgetReached(spentUSD: costUSD, budgetUSD: maxCostUSD))
         break loop
+      }
+      if let budget = configuration.timeBudget, let notice = timeNotices.next(for: budget) {
+        pendingNotices.append(notice)
+        record.nudges = (record.nudges ?? 0) + 1
+        continuation.yield(.nudged(reason: notice))
       }
       drainPendingNotices(turnNudge: &guardNudge)
       // Background subagents that finished since the last request: their reports enter
@@ -2193,6 +2199,7 @@ public actor Session {
   {
     var outcome = StepOutcome()
     var accumulator = StreamAccumulator()
+    let outputLimit = traits.chatOutputLimit(responseTokenLimit(profile: profile), profile: profile)
     // The history this request sends (`chatReplayHistory`: the entries already stripped on a
     // provider that doesn't replay them), read once — what it carries is what the step replayed.
     let replay = chatReplayHistory
@@ -2216,6 +2223,8 @@ public actor Session {
           reasoning: chatReasoning(profile: profile),
           reasoningEffort: chatReasoningEffort(profile: profile),
           tools: requestTools(for: profile, pack: pack)?.map(\.toolDefinition),
+          maxTokens: outputLimit.tokens,
+          maxCompletionTokens: outputLimit.completionTokens,
           streamOptions: traits.requestsStreamUsage ? StreamOptions(includeUsage: true) : nil,
           extraBody: fallbackExtraBody)))
     } catch is CancellationError {
@@ -2414,6 +2423,14 @@ public actor Session {
     return MessagesTranslator.canEnableThinking(history: requestHistory())
   }
 
+  /// Explicit response cap narrowed by the manifest; nil keeps existing request defaults.
+  private func responseTokenLimit(profile: ModelProfile) -> Int? {
+    guard let configured = configuration.maxResponseTokens else { return nil }
+    let limit = max(1, configured)
+    guard let ceiling = profile.maxCompletionTokens, ceiling > 0 else { return limit }
+    return min(limit, ceiling)
+  }
+
   /// The `max_tokens` and `thinking` a `/messages` request sends — the output cap bumped above
   /// the thinking budget when thinking is on (Anthropic requires `max_tokens > budget_tokens`),
   /// otherwise the usual default, both under the manifest's `max_completion_tokens` when the
@@ -2427,13 +2444,14 @@ public actor Session {
   /// the replay decision off this shape so the two never disagree.
   private func messagesRequestShape(profile: ModelProfile, thinkingEnabled: Bool) -> (maxTokens: Int, thinking: Thinking?) {
     let dial = messagesThinking(profile: profile)
+    let ceiling = responseTokenLimit(profile: profile) ?? profile.maxCompletionTokens
     guard thinkingEnabled, case .enabled(let budgetTokens, _) = dial else {
-      let plan = MessagesTranslator.outputPlan(maxCompletionTokens: profile.maxCompletionTokens, thinkingBudget: nil)
+      let plan = MessagesTranslator.outputPlan(maxCompletionTokens: ceiling, thinkingBudget: nil)
       // A dial the history can't honor this step sends no thinking field; `.disabled` stays.
       let thinking: Thinking? = { if case .disabled = dial { return .disabled } else { return nil } }()
       return (plan.maxTokens, thinking)
     }
-    let plan = MessagesTranslator.outputPlan(maxCompletionTokens: profile.maxCompletionTokens, thinkingBudget: budgetTokens)
+    let plan = MessagesTranslator.outputPlan(maxCompletionTokens: ceiling, thinkingBudget: budgetTokens)
     guard let budget = plan.budget else { return (plan.maxTokens, nil) }
     return (plan.maxTokens, .enabled(budgetTokens: budget))
   }
@@ -2552,6 +2570,7 @@ public actor Session {
           models: fallbackModelsField,
           input: .items(ResponsesTranslator.history(history)),
           instructions: systemText(pack: pack, profile: profile),
+          maxOutputTokens: responseTokenLimit(profile: profile),
           include: reasoning == nil ? nil : [ResponsesTranslator.encryptedReasoningInclude],
           reasoning: reasoning,
           tools: requestTools(for: profile, pack: pack)?.map(ResponsesTranslator.tool),

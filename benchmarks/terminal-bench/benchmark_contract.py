@@ -25,6 +25,8 @@ class BenchmarkConfig:
   command_diagnostics: bool = False
   preserve_command_evidence: bool = False
   keep_recent_tool_tokens: int | None = None
+  time_aware: bool = False
+  max_response_tokens: int | None = None
 
   @classmethod
   def from_environment(cls, environment):
@@ -50,7 +52,10 @@ class BenchmarkConfig:
       command_diagnostics=boolean("ARNES_COMMAND_DIAGNOSTICS"),
       preserve_command_evidence=boolean("ARNES_PRESERVE_COMMAND_EVIDENCE"),
       keep_recent_tool_tokens=int(environment["ARNES_KEEP_RECENT_TOOL_TOKENS"])
-        if "ARNES_KEEP_RECENT_TOOL_TOKENS" in environment else None)
+        if "ARNES_KEEP_RECENT_TOOL_TOKENS" in environment else None,
+      time_aware=boolean("ARNES_TIME_AWARE"),
+      max_response_tokens=int(environment["ARNES_MAX_RESPONSE_TOKENS"])
+        if "ARNES_MAX_RESPONSE_TOKENS" in environment else None)
     url = urlsplit(config.binary_url)
     if url.scheme != "https" or not url.hostname or url.username or url.password:
       raise ValueError("Binary URL must be HTTPS without credentials")
@@ -68,12 +73,14 @@ class BenchmarkConfig:
       raise ValueError("ARNES_KEEP_RECENT_TOOL_TOKENS must be nonnegative")
     if not 0 <= config.keep_alive_seconds <= 3600:
       raise ValueError("ARNES_KEEP_ALIVE_SECONDS must be between 0 and 3600")
+    if config.max_response_tokens is not None and config.max_response_tokens < 1:
+      raise ValueError("ARNES_MAX_RESPONSE_TOKENS must be positive")
     return config
 
   def provenance(self):
     values = asdict(self)
     del values["binary_url"]  # A signed URL is private; the digest identifies its contents.
-    return dict(values, provider="openrouter", bare=True, memory=False, schema_version=3)
+    return dict(values, provider="openrouter", bare=True, memory=False, schema_version=4)
 
   def runtime_config(self):
     config = {
@@ -87,6 +94,9 @@ class BenchmarkConfig:
     return config
 
   def command(self, instruction, session_id):
+    experiments = ["--time-aware"] if self.time_aware else []
+    if self.max_response_tokens is not None:
+      experiments += ["--max-response-tokens", str(self.max_response_tokens)]
     return shlex.join([
       "/usr/local/bin/arnes", "do", instruction, "-m", self.model,
       "--effort", self.effort, "--dialect", self.dialect,
@@ -95,7 +105,7 @@ class BenchmarkConfig:
       "--budget", str(self.budget), "--yes", "--add-dir", "/", "--bare",
       "--no-memory", "--session", "--session-id", session_id,
       "--output-format", "stream-json", "--include-partial",
-      "--output-last-message", "/logs/agent/arnes-last-message.md"])
+      "--output-last-message", "/logs/agent/arnes-last-message.md"] + experiments)
 
 
 def pack_fingerprint(files):

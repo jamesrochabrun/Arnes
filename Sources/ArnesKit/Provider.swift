@@ -952,6 +952,16 @@ public struct ProviderTraits: Sendable, Equatable {
   /// do. The memberwise default is OpenRouter's — every traits value built before the field
   /// existed sends the request it always sent.
   public var reasoningShape: ReasoningShape
+  /// Default chat output-limit spelling when a manifest is silent. Independent of the
+  /// reasoning dial: disabling reasoning must not change which request field is accepted.
+  public var prefersMaxCompletionTokens: Bool
+
+  /// A manifest's explicit spelling wins. Sparse OpenAI-style endpoints use
+  /// `max_completion_tokens`; OpenRouter and other chat requests use `max_tokens`.
+  func chatOutputLimit(_ limit: Int?, profile: ModelProfile) -> (tokens: Int?, completionTokens: Int?) {
+    let completion = profile.supportsMaxCompletionTokens ?? prefersMaxCompletionTokens
+    return completion ? (nil, limit) : (limit, nil)
+  }
 
   public init(
     name: String,
@@ -962,7 +972,8 @@ public struct ProviderTraits: Sendable, Equatable {
     nativeDialects: Bool,
     replaysReasoningDetails: Bool = false,
     supportsCacheControl: Bool = false,
-    reasoningShape: ReasoningShape = .openrouter)
+    reasoningShape: ReasoningShape = .openrouter,
+    prefersMaxCompletionTokens: Bool = false)
   {
     self.name = name
     self.defaultModel = defaultModel
@@ -973,6 +984,7 @@ public struct ProviderTraits: Sendable, Equatable {
     self.replaysReasoningDetails = replaysReasoningDetails
     self.supportsCacheControl = supportsCacheControl
     self.reasoningShape = reasoningShape
+    self.prefersMaxCompletionTokens = prefersMaxCompletionTokens
   }
 
   /// openrouter.ai as it has always been driven.
@@ -1004,12 +1016,12 @@ public struct ProviderTraits: Sendable, Equatable {
       return ProviderTraits(
         name: name, defaultModel: defaultModel, fallbackStyle: .litellmFallbacks,
         requestsStreamUsage: true, estimatesCost: true, nativeDialects: nativeDialects,
-        supportsCacheControl: true, reasoningShape: shape)
+        supportsCacheControl: true, reasoningShape: shape, prefersMaxCompletionTokens: true)
     case .openaiCompatible:
       return ProviderTraits(
         name: name, defaultModel: defaultModel, fallbackStyle: .unsupported,
         requestsStreamUsage: true, estimatesCost: true, nativeDialects: nativeDialects,
-        reasoningShape: shape)
+        reasoningShape: shape, prefersMaxCompletionTokens: true)
     }
   }
 }

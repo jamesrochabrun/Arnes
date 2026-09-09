@@ -52,6 +52,15 @@ class ArnesAgent(BaseInstalledAgent):
     self.arnes_provenance = config.provenance()
     self.arnes_provenance["packs_sha256"] = pack_fingerprint(self.arnes_packs)
     self.arnes_provenance["packs"] = sorted(self.arnes_packs)
+    required_flags = ["--keep-alive"]
+    if config.time_aware:
+      required_flags.append("--time-aware")
+    if config.max_response_tokens is not None:
+      required_flags.append("--max-response-tokens")
+    probes = "; ".join(
+      f"/usr/local/bin/arnes do --help | grep -- {shlex.quote(flag)} >/dev/null || "
+      f"{{ echo {shlex.quote('The pinned binary must support arnes do ' + flag)} >&2; exit 1; }}"
+      for flag in required_flags)
     try:
       await self.exec_as_root(environment, command=(
         "set -eu; "
@@ -63,9 +72,7 @@ class ArnesAgent(BaseInstalledAgent):
         f"curl --proto '=https' --proto-redir '=https' -fLsS --retry 2 --max-time 120 {shlex.quote(config.binary_url)} -o \"$candidate\"; "
         f"printf '%s  %s\\n' {shlex.quote(config.binary_sha256)} \"$candidate\" | sha256sum -c -; "
         "install -m 755 \"$candidate\" /usr/local/bin/arnes; "
-        "/usr/local/bin/arnes --version; "
-        "/usr/local/bin/arnes do --help | grep -- --keep-alive >/dev/null || "
-        "{ echo 'The pinned binary must support arnes do --keep-alive' >&2; exit 1; }"
+        "/usr/local/bin/arnes --version; " + probes
       ))
     except Exception:
       # Harbor keeps the setup logs; do not duplicate potentially private exception text.

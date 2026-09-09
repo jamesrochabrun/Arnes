@@ -76,9 +76,18 @@ Optional, independently controlled experiments (all off/unset in the control):
 - `ARNES_COMMAND_DIAGNOSTICS=true`: append bounded findings from foreground bash output.
 - `ARNES_PRESERVE_COMMAND_EVIDENCE=true`: keep recent command/result excerpts in compaction input.
 - `ARNES_KEEP_RECENT_TOOL_TOKENS=4000`: replace recent-result count with an estimated token budget.
+- `ARNES_TIME_AWARE=true`: send remaining-time notices at request boundaries, starting before
+  the first request. The existing `ARNES_TIMEOUT` still enforces the deadline.
+- `ARNES_MAX_RESPONSE_TOKENS=8192`: set a positive per-response output-token ceiling for the
+  main loop, including reasoning and tool arguments. It is not a response-duration timer;
+  a cutoff uses the existing bounded continuation and partial-call refusal behavior.
 
-Boolean controls accept only `true` or `false`; the token budget is a nonnegative integer.
-The adapter writes these into its isolated config and provenance (schema version 3).
+Boolean controls accept only `true` or `false`; the recent-tool token budget is nonnegative
+and the response-token ceiling is positive. The adapter writes settings into its isolated
+config or CLI arguments and provenance (schema version 4). Installation checks that the
+binary supports each enabled CLI experiment. For the independent early-implementation
+prompt proposal, use `ARNES_PACKS_DIR=evals/ab/packs-early-implementation`.
+See [the controlled time-budget protocol](../../evals/ab/time-budget.md).
 Manifest caching is disabled through `policies.manifestCache.enabled`; no personal config
 is edited. A feature's implementation is not evidence that it improves task completion.
 

@@ -30,7 +30,7 @@ async def main():
   fixture = importlib.util.module_from_spec(spec)
   spec.loader.exec_module(fixture)
   reports = []
-  for mode, grace in [("default", 0), ("deadline", 3), ("signal", 30)]:
+  for mode, grace in [("default", 0), ("deadline", 3), ("signal", 30), ("time-aware", 0), ("time-limit", 0)]:
     root = Path("/logs/agent") / mode
     root.mkdir(parents=True)
     work = Path("/work") / mode
@@ -46,6 +46,9 @@ async def main():
       fixture.tool("bash", command=f"curl --retry 10 --retry-connrefused --retry-delay 0 -fsS http://127.0.0.1:{port}/index.html"),
       {"content": "Fixture complete."},
     ])
+    if mode == "time-limit":
+      provider.scripts.clear()
+      provider.scripts.append("hold")
     async def execute(**kwargs):
       environment = dict(os.environ, **(kwargs.get("env") or {}), ARNES_BASE_URL=provider.url)
       result = await asyncio.to_thread(subprocess.run, ["bash", "-c", kwargs["command"]],
@@ -53,12 +56,17 @@ async def main():
       assert result.returncode == 0, result.stderr
       return types.SimpleNamespace(return_code=result.returncode)
     agent = adapter.ArnesAgent(logs_dir=root, extra_env={"OPENROUTER_API_KEY": "offline-fixture"})
-    agent.arnes_config = BenchmarkConfig.from_environment({
+    settings = {
       "ARNES_LINUX_BINARY_URL": "https://fixture.invalid/arnes",
       "ARNES_LINUX_BINARY_SHA256": "a" * 64,
       "ARNES_MODEL": "test/model", "ARNES_EFFORT": "high", "ARNES_MAX_STEPS": "5",
       "ARNES_TIMEOUT": "30", "ARNES_BUDGET": "1", "ARNES_KEEP_ALIVE_SECONDS": str(grace),
-    })
+    }
+    if mode in {"time-aware", "time-limit"}:
+      settings.update(ARNES_TIME_AWARE="true", ARNES_MAX_RESPONSE_TOKENS="8192")
+    if mode == "time-limit":
+      settings["ARNES_TIMEOUT"] = "2"
+    agent.arnes_config = BenchmarkConfig.from_environment(settings)
     agent.arnes_provenance = agent.arnes_config.provenance()
     agent.arnes_packs = {}
     context = types.SimpleNamespace(metadata=None)
@@ -66,6 +74,15 @@ async def main():
     try:
       await agent.run("Run the scripted fixture.", types.SimpleNamespace(exec=execute), context)
       result = json.loads((root / "arnes-result.json").read_text())
+      if mode == "time-limit":
+        assert result["stop_reason"] == "timeout", result
+        assert (root / "arnes-exit-code.txt").read_text().strip() == "3"
+        assert len(provider.requests) == 1
+        assert provider.requests[0]["max_tokens"] == 8192
+        assert "[arnes time budget]" in json.dumps(provider.requests[0]["messages"])
+        assert context.metadata["arnes"]["transcript_available"]
+        reports.append(dict(mode=mode, checks="passed", scripted_requests=1, external_model_calls=0))
+        continue
       assert result["stop_reason"] == "completed", result
       assert result["tool_calls"] == 3, result
       assert context.metadata["arnes"]["transcript_available"]
@@ -89,6 +106,15 @@ async def main():
         assert probe.connect_ex(("127.0.0.1", port)) != 0, "managed service survived cleanup"
       assert len(provider.requests) == 4, "the grace period must not make model requests"
       assert result["routed_models"] == ["test/routed"]
+      if mode == "time-aware":
+        assert all(request.get("max_tokens") == 8192 for request in provider.requests)
+        assert any("[arnes time budget]" in json.dumps(message) for message in provider.requests[0]["messages"])
+        assert "[arnes time budget]" in (root / "arnes-transcript.jsonl").read_text()
+        assert agent.arnes_provenance["time_aware"]
+        assert agent.arnes_provenance["max_response_tokens"] == 8192
+      else:
+        assert all("max_tokens" not in request for request in provider.requests)
+        assert "[arnes time budget]" not in json.dumps(provider.requests)
       reports.append(dict(mode=mode, checks="passed", scripted_requests=4, external_model_calls=0))
     finally:
       provider.close()

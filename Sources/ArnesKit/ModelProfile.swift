@@ -21,6 +21,9 @@ public struct ModelProfile: Codable, Sendable {
   /// LiteLLM `max_tokens` beside `max_input_tokens`). nil when the manifest doesn't say — the
   /// `/messages` `max_tokens` then keeps its pre-manifest default.
   public let maxCompletionTokens: Int?
+  /// Whether the manifest advertises the chat `max_completion_tokens` spelling. nil for
+  /// sparse manifests and older cache rows, which use the provider's default spelling.
+  public let supportsMaxCompletionTokens: Bool?
   /// Whether the model takes images as input (OpenRouter `architecture.input_modalities` contains
   /// `image` — or, for an older manifest, the `modality` string's input side does; LiteLLM
   /// `supports_vision`). What gates the `view_image` tool. **The one capability assumed off when
@@ -43,6 +46,7 @@ public struct ModelProfile: Codable, Sendable {
     promptPricePerToken = model.pricing?.prompt.flatMap(Double.init)
     completionPricePerToken = model.pricing?.completion.flatMap(Double.init)
     maxCompletionTokens = model.topProvider?.maxCompletionTokens
+    supportsMaxCompletionTokens = model.supportedParameters.map { $0.contains("max_completion_tokens") }
     supportsVision = Self.acceptsImages(model.architecture)
   }
 
@@ -70,7 +74,8 @@ public struct ModelProfile: Codable, Sendable {
     promptPricePerToken: Double?,
     completionPricePerToken: Double?,
     maxCompletionTokens: Int? = nil,
-    supportsVision: Bool = false)
+    supportsVision: Bool = false,
+    supportsMaxCompletionTokens: Bool? = nil)
   {
     self.id = id
     let resolvedFamily = family ?? ModelFamily(modelId: id)
@@ -84,6 +89,7 @@ public struct ModelProfile: Codable, Sendable {
     self.completionPricePerToken = completionPricePerToken
     self.maxCompletionTokens = maxCompletionTokens
     self.supportsVision = supportsVision
+    self.supportsMaxCompletionTokens = supportsMaxCompletionTokens
   }
 
   /// Minimal profile for a model the manifest doesn't know (`openrouter/auto`, a gateway
@@ -102,6 +108,7 @@ public struct ModelProfile: Codable, Sendable {
     promptPricePerToken = nil
     completionPricePerToken = nil
     maxCompletionTokens = nil
+    supportsMaxCompletionTokens = nil
     supportsVision = false
   }
 }

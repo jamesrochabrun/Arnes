@@ -9,6 +9,31 @@ import OpenRouterSwift
 /// the `# Subagents` listing and the `# Delegation` text, the suffix — and the things that must
 /// ride a **user** message instead (notices, the loop guard's nudge, a plan update).
 final class PrefixStabilityTests: XCTestCase {
+  func testTimeNoticesReachFirstRequestAndThresholdWithoutChangingPrefix() async throws {
+    let clock = ManualBudgetClock()
+    let budget = RunTimeBudget(seconds: 100, now: { clock.read() })
+    let mock = MockOpenRouterService()
+    mock.manifestJSON = Fixtures.manifest(Fixtures.manifestModel(id: "test/model"))
+    mock.chunkScripts = [
+      [Fixtures.toolCallChunk(id: "one", name: "listing_probe", arguments: #"{"q":"one"}"#), Fixtures.usageChunk(cost: 0)],
+      [Fixtures.textChunk("done"), Fixtures.usageChunk(cost: 0)],
+    ]
+    mock.streamGate = { _ in clock.advance(60) }
+    let session = Session(service: mock, tools: [ListingTool()], store: tempRecordStore(),
+      configuration: .init(model: "test/model", maxResponseTokens: 8192, timeBudget: budget))
+    _ = try await Events.drain(await session.send("go"))
+    XCTAssertEqual(mock.requests.count, 2)
+    let first = try XCTUnwrap(mock.requests.first)
+    let second = try XCTUnwrap(mock.requests.last)
+    XCTAssertEqual(systemText(first), systemText(second))
+    XCTAssertEqual(try toolBytes(first), try toolBytes(second))
+    XCTAssertFalse(systemText(first)?.contains("arnes time budget") == true)
+    XCTAssertTrue(first.messages.contains { $0.role == .user && $0.content?.plainText.contains("100 of 100") == true })
+    XCTAssertTrue(second.messages.contains { $0.role == .user && $0.content?.plainText.contains("40 of 100") == true })
+    XCTAssertEqual(first.maxTokens, 8192)
+    XCTAssertEqual(second.maxTokens, 8192)
+  }
+
   func testActiveTurnDefersPromptDialsAndRefusesModelSwitching() async throws {
     let root = try tempDirectory("active-dials")
     defer { try? FileManager.default.removeItem(at: root) }
