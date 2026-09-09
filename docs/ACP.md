@@ -101,7 +101,8 @@ floor, cancel/restart, background process-tree cleanup, disconnect, signals, ses
 isolation and durable records. It keeps the normal platform sandbox policy. Mac and Linux
 CI runs it without paid calls. All 11 executable cases pass on Mac and
 Linux arm64/x86_64; the hosted Mac and Linux x86_64 jobs pass against SwiftOpenAI 4.6.1. Linux also passes the full Swift suite after the process-supervision fix;
-Arnes uses SwiftOpenAI 4.6.1, which includes the dependency correction from PR #199, so a
-clean Linux build requires no dependency checkout edits.
+Arnes now uses SwiftOpenAI 4.6.2, which includes the dependency correction from PR #199
+and stream-framing correction from PR #200. Clean Linux builds require no dependency
+checkout edits; [stream diagnostics](stream-diagnostics.md) records the latter regression.
 [VALIDATION.md](VALIDATION.md) records the exact evidence boundary. A real editor's UI
 and a live provider's behavior remain separate compatibility checks.

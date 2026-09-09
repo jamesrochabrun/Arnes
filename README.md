@@ -861,6 +861,18 @@ apply. This runs no extra checks and is not LSP integration; background `job` po
 unchanged. Diagnostics and command-evidence retention are off by default pending paired
 evaluation. See [the experiment controls](benchmarks/terminal-bench/README.md#comparing-changes).
 
+**Private stream diagnostics.** For a human-operated diagnostic, set
+`ARNES_STREAM_DIAGNOSTICS_DIR` to an existing absolute directory owned by you with mode
+0700 and no symlink path components, preferably outside the project under `~/.arnes/`.
+This opt-in saves only typed SDK decoding failures: at most eight 0600 JSON files, each
+at most 32 KiB. Payloads above 16 KiB are omitted; accepted payloads and metadata are
+scrubbed for recognized secrets before encoding. Other provider/user content remains
+private. Use a new directory for each diagnostic; existing slots are never overwritten.
+`payload_base64` holds the SDK's normalized decoder input, with `payload_changed` marking
+redaction or UTF-8 replacement; original SSE framing is unavailable in the current SDK.
+No stdout, prompt, retry or recovery behavior changes. A capture cannot establish what
+was in a previous uncaptured failure. See [the diagnostic notes](docs/stream-diagnostics.md).
+
 ## Current scope and limitations
 
 The v0.7.0 source includes the interactive and headless workflows documented above,
@@ -911,8 +923,8 @@ sandbox policy. Mac/Linux CI is configured to run it after the Swift suite. A re
 or OS confinement. Current results and outstanding platform gates are in
 [docs/VALIDATION.md](docs/VALIDATION.md).
 
-SwiftOpenAI 4.6.1 supplies the Linux transport dependency fix. Normal builds use the
-released version in `Package.resolved`; no sibling checkout is required. For upstream
+SwiftOpenAI 4.6.2 supplies the Linux transport dependency and stream-framing fixes.
+Normal builds use the released version in `Package.resolved`; no sibling checkout is required. For upstream
 transport development, `swift package edit swiftopenai --path ../SwiftOpenAI` enables a
 local override after resolution. Use `swift package unedit swiftopenai` and
 `swift package resolve` to restore the release. No OpenRouterSwift override is required.

@@ -1,6 +1,6 @@
 # Agentic-quality validation audit
 
-Updated 2026-09-08; continues the 2026-09-06 audit. The objective is reliable agentic work before distribution.
+Updated 2026-09-09; continues the 2026-09-06 audit. The objective is reliable agentic work before distribution.
 This records implementation evidence and missing validation; it is not a benchmark score
 or approval to promote experimental defaults. See [the implementation ledger](../ENHANCEMENTS.md).
 
@@ -14,13 +14,41 @@ or approval to promote experimental defaults. See [the implementation ledger](..
 | Long-task context | [TokenRetentionTests](../Tests/ArnesKitTests/TokenRetentionTests.swift) and [CommandEvidenceTests](../Tests/ArnesKitTests/CommandEvidenceTests.swift): optional estimated-token retention, bounded paired command evidence, clearing without deleting stored history, compaction and resume | Whether a real summarizer preserves objectives, constraints, edits and verification evidence; the integration test deliberately scripts its summary |
 | Terminal reliability | [TerminalRecoveryTests](../Tests/ArnesKitTests/TerminalRecoveryTests.swift): real timeout/recovery, large failure tails, cancelled waits and registry restart. ACP tests cover concurrent MCP stop/restart with stubborn descendants; specialist tests combine cancellation, snapshots and background jobs while preserving a parent's live registry | Mac, Linux arm64 and Linux x86_64 subprocess checks pass; installer behavior is untested. Mac sandbox enforcement passes |
 | Executable diagnostics | [CommandDiagnosticsTests](../Tests/ArnesKitTests/CommandDiagnosticsTests.swift): bounded extraction from observed foreground bash output, no extra execution, denial/taint/redaction coverage, eval/panel propagation and inherited configuration | Completion/cost effect on real tasks; parsed command status is not a task verdict |
-| ACP | [ACPTests](../Tests/ArnesKitTests/ACPTests.swift): protocol progress, approval/denial, cancellation before file execution, bounded pipe backpressure, joined shutdown and durable records. [Executable client](../scripts/test-acp.py): all 11 transport/HTTP cases pass on Mac, Linux arm64 and Linux x86_64 | SwiftOpenAI 4.6.1 is resolved without an override. Real editor UI and provider compatibility remain separate checks |
+| ACP | [ACPTests](../Tests/ArnesKitTests/ACPTests.swift): protocol progress, approval/denial, cancellation before file execution, bounded pipe backpressure, joined shutdown and durable records. [Executable client](../scripts/test-acp.py): all 11 transport/HTTP cases pass on Mac, Linux arm64 and Linux x86_64 | SwiftOpenAI 4.6.2 is resolved without an override. Real editor UI and provider compatibility remain separate checks |
 | Bounded specialists | [SpecialistProposalTests](../Tests/ArnesKitTests/SpecialistProposalTests.swift): constrained tools/permissions, snapshot cancellation and job cleanup, remaining-budget checks at spawn and after queuing, parent-tree preservation. [ParallelTasksTests](../Tests/ArnesKitTests/ParallelTasksTests.swift) verifies cancelled waiters do not hold or steal slots. Existing nested budget/permission tests remain in the full suite | Whether delegation improves independent correctness after child cost and duplicate work. Budgets check observed usage; concurrent in-flight work can overshoot, with no reservation ledger |
 
 All optional guidance/diagnostics/context/role treatments remain opt-in. A patch-editing
 interface, PTY, LSP and native Linux sandbox are not implemented by this work. They remain
 conditional follow-ups requiring failure evidence and a safety design; container isolation
 is required for the current Linux benchmark adapter.
+
+## Stream framing and private diagnostics on 2026-09-09
+
+SwiftOpenAI 4.6.2 (`c757e0b3b00aa775f0ce41aa3d18e343990a145a`) includes
+[PR #200](https://github.com/jamesrochabrun/SwiftOpenAI/pull/200): the Linux adapter
+retains partial lines and UTF-8 characters across HTTP chunks. The frozen binary
+fails three synthetic valid split-response cases; the fixed adapter completes them
+with exact text. Malformed JSON remains an error. Arnes's manifest requires 4.6.2
+or newer, and its lock selects that release; no other dependency pin changes.
+
+[Private diagnostics](stream-diagnostics.md) capture bounded, scrubbed typed decoder
+payloads in owner-only files when explicitly enabled. Original SSE framing is not
+available from the SDK error and is labelled unavailable. The opt-in does not change
+prompt defaults, normal JSON output, retry limits or truncation recovery.
+
+Released-package validation uses `--force-resolved-versions` with no local overrides.
+Mac: 1,922 Swift tests, one skip, zero failures; executable build and all 11 ACP cases
+pass, as do all 29 offline Python adapter checks. Linux arm64: the static release build
+and all nine framing, 11 ACP and seven Harbor CLI cases pass in disposable network-none
+containers. All 26 locked dependency checkouts are clean and match the lockfile. The
+prepared Linux binary's SHA-256 is
+`6da2d63caa72b1126edb6a151b6e005c3489d467c79c9d6494db71c62c889280`.
+
+The historical failing payloads were not saved, so this confirmed client defect
+does not establish the cause of those live failures. Benchmark evidence and the
+default prompt remain unchanged. The [offline CLI fixture](../scripts/test-stream-framing.py)
+uses a scripted loopback provider in a disposable network-none Linux container;
+it does not measure model quality or start a paid diagnostic.
 
 ## Harbor failure corrections on 2026-09-08
 

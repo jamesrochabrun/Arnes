@@ -2102,6 +2102,8 @@ public actor Session {
         }
         return outcome
       } catch let failed as StepTransportError {
+        await recordStreamFailure(failed.underlying, dialect: dialect.rawValue,
+          phase: failed.phase == .request ? "request" : "stream", emittedOutput: false)
         let retries = requestRetries + streamRetries + recoveryRetries
         if Task.isCancelled {
           // The turn was interrupted under the request: the loop's interrupt path takes over.
@@ -2194,6 +2196,12 @@ public actor Session {
     }
   }
 
+  private func recordStreamFailure(_ error: any Error, dialect: String, phase: String, emittedOutput: Bool) async {
+    guard !Task.isCancelled, let diagnostics = configuration.streamFailureDiagnostics else { return }
+    await diagnostics.record(error, context: .init(sessionID: id, model: model,
+      dialect: dialect, phase: phase, emittedOutput: emittedOutput))
+  }
+
   private func chatStep(
     pack: PromptPack,
     profile: ModelProfile,
@@ -2252,6 +2260,9 @@ public actor Session {
       // The stream broke before the model said anything — retryable in principle; after
       // output the error propagates exactly as it always did (a rerun would repeat the text).
       throw StepTransportError(phase: .stream, underlying: error)
+    } catch {
+      await recordStreamFailure(error, dialect: "chat", phase: "stream", emittedOutput: true)
+      throw error
     }
     outcome.text = accumulator.text
     outcome.toolCalls = accumulator.toolCalls
@@ -2538,6 +2549,7 @@ public actor Session {
       // endpoint, propagated exactly as chat propagates its own.
       throw error
     } catch {
+      await recordStreamFailure(error, dialect: "messages", phase: "stream", emittedOutput: outcome.emittedOutput)
       outcome.failure = "\(error)"
     }
     outcome.text = accumulator.text
@@ -2602,6 +2614,7 @@ public actor Session {
       // The wire's failure after output, not the endpoint's dialect — propagated like chat's.
       throw error
     } catch {
+      await recordStreamFailure(error, dialect: "responses", phase: "stream", emittedOutput: outcome.emittedOutput)
       outcome.failure = "\(error)"
     }
     if !outcome.interrupted, let failure = accumulator.failure {

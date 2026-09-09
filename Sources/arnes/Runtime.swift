@@ -51,6 +51,7 @@ struct ArnesRuntime {
   /// How every CLI session's model requests survive a flaky wire — `policies.transport` over the
   /// built-in retry and idle-timeout numbers. See `TransportPolicy`.
   let transport: TransportPolicy
+  let streamFailureDiagnostics: (any StreamFailureDiagnostics)?
   /// Top-level `web` from `~/.arnes/config.json` (T5): the `web_fetch` tool's domain lists and
   /// caps. nil = no block = no tool in any run of this process. See `WebConfig`.
   let web: WebConfig?
@@ -180,6 +181,7 @@ struct ArnesRuntime {
     configuration.compaction = compaction
     configuration.adaptiveThink = adaptiveThink
     configuration.commandDiagnostics = commandDiagnostics
+    configuration.streamFailureDiagnostics = streamFailureDiagnostics
   }
 
   /// The session-wide facts for an environment block: platform and date captured now, plus
@@ -460,7 +462,21 @@ struct ArnesRuntime {
       adaptiveThink: config?.policies?.adaptiveThink ?? true,
       panelOnVerifierFail: config?.policies?.panelOnVerifierFail,
       commandDiagnostics: config?.policies?.commandDiagnostics ?? false,
-      spillRoot: stateDirectory?.appendingPathComponent("tmp"))
+      spillRoot: stateDirectory?.appendingPathComponent("tmp"),
+      streamFailureDiagnostics: try streamDiagnostics(environment: ProcessInfo.processInfo.environment, provider: resolved))
+  }
+
+  static func streamDiagnostics(environment: [String: String], provider: ResolvedProvider) throws -> StreamFailureStore? {
+    guard let path = environment["ARNES_STREAM_DIAGNOSTICS_DIR"] else { return nil }
+    guard path.hasPrefix("/") else {
+      throw ValidationError("ARNES_STREAM_DIAGNOSTICS_DIR must name an existing absolute directory with mode 0700")
+    }
+    do {
+      return try StreamFailureStore(directory: URL(fileURLWithPath: path),
+        knownSecrets: [provider.apiKey] + Array(provider.headers.values))
+    } catch {
+      throw ValidationError("ARNES_STREAM_DIAGNOSTICS_DIR must be an existing owner-only directory (0700) without symlink components")
+    }
   }
 
   /// The retention sweep runs at most once per process, however many runtimes a command
@@ -492,9 +508,11 @@ struct ArnesRuntime {
     adaptiveThink: Bool = true,
     panelOnVerifierFail: Int? = nil,
     commandDiagnostics: Bool = false,
-    spillRoot: URL? = nil)
+    spillRoot: URL? = nil,
+    streamFailureDiagnostics: (any StreamFailureDiagnostics)? = nil)
   {
     self.provider = provider
+    self.streamFailureDiagnostics = streamFailureDiagnostics
     self.manifestCache = manifestCache
     self.adaptiveThink = adaptiveThink
     self.panelOnVerifierFail = panelOnVerifierFail

@@ -1632,6 +1632,22 @@ drops the `# Environment` git lines; `sandbox-exec` when a sandbox is configured
 over it warns "truncated" —, skipped `@path` imports, whether the project's own files are
 trusted yet). Run it after editing any file under `~/.arnes` or a project's `.arnes/`.
 
+## Private stream diagnostics
+
+`ARNES_STREAM_DIAGNOSTICS_DIR=/absolute/private/directory` opts a human-operated run into
+capturing typed SDK decoding failures. The directory must already exist, be owned by the
+current user, have mode 0700 and have no symlink path components. Prefer an out-of-project
+directory under `~/.arnes/`; the sink never grants tools access to it. Eight exclusive
+0600 slots bound retention across sessions/processes (32 KiB per artifact); use a fresh
+directory for another diagnostic. Payloads over 16 KiB are omitted. Complete accepted
+strings are scrubbed before size caps/base64; other provider/user text is still private.
+`payload_base64` is normalized SDK decoder input, not wire bytes; `payload_changed` marks
+redaction/UTF-8 replacement and `wire_framing` explicitly records unavailable framing.
+The switch defaults off and changes no prompt, output format, retry, timeout or cost limit.
+Do not publish captures or launch paid/live diagnostics unattended. A missing artifact can
+mean no typed decoding failure, full slots, an oversized encoded artifact or a refused write.
+Use offline fixtures first; preserve prior benchmark evidence and defaults.
+
 ## Debug prompt — "what does the model actually see?" / "why is the prompt so big?"
 
 ```bash

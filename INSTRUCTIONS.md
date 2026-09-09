@@ -74,10 +74,14 @@ Documentation:
   orchestration, file permissions and canonical session transcript capture.
 - `ENHANCEMENTS.md` — agentic-quality implementation ledger and verification scope.
 - `docs/VALIDATION.md` — requirement-level evidence audit, verified Mac/Linux arm64/x86_64 gates,
-  SwiftOpenAI 4.6.1 adoption, hosted CI/fixture receipts and prior PR results, plus editor and paired-model gates.
+  released SwiftOpenAI adoption, stream diagnostics, hosted CI/fixture receipts and prior PR results, plus editor and paired-model gates.
 - `Sources/CArnesProcess/` — Linux C target for posix_spawn, child descriptor
   closure and waitpid status decoding; glibc 2.34+, no additional external package.
 - `docs/ACP.md` — ACP v1 stdio contract, capability limits and integration checks.
+- `docs/stream-diagnostics.md` — private decoder evidence contract, offline Linux chunk-boundary
+  defect, upstream ownership and the optional single human-operated follow-up.
+- `scripts/test-stream-framing.py` — nine scripted Linux CLI stream cases; disposable network-none
+  container required, frozen/fixed expectations, exact private captures and cancellation checks.
 - `.github/workflows/ci.yml` / `release.yml` — Swift 6.2 Linux images for the locked
   manifests; CI explicitly builds the executable and enforces the lockfile before tests.
 - `scripts/test-acp.py` — actual CLI executable client and local HTTP mock provider;
@@ -112,6 +116,7 @@ Sources/ArnesKit/
   ACP.swift                # ACPConnection actor; injectable Session factory/output, tracked requests, streamed text/plans, permission deadlines, cancellation/drain, close/disconnect cleanup, literal stdio MCP descriptors
   ACPTransport.swift       # bounded newline framing, stoppable readiness-driven input, serialized JSON-RPC output on an IO queue with a five-second backpressure deadline and descriptor identity checks
   CommandDiagnostics.swift # opt-in bounded foreground bash compiler/typecheck/lint/test extraction; command status, not a task verdict; normal result guard remains authoritative
+  StreamFailureDiagnostics.swift # injectable typed-decoder failure sink; ARNES_STREAM_DIAGNOSTICS_DIR opts CLI sessions in through Runtime.applyLimits; existing 0700 directory, no symlink components, checked device/inode, eight exclusive 0600 slots of at most 32 KiB; complete accepted payloads scrubbed before encoding, >16 KiB omitted; normalized SDK bytes only, wire framing explicitly unavailable; no retry/prompt/output changes
   CommandEvidence.swift    # optional compaction appendix; newest four paired bash calls with bounded guarded output head/tail excerpts as JSON data, no extra execution or spill reads
   ToolGuidance.swift       # optional <family>.tools.json additive descriptions; bounded no-follow reads; definition-only views after capability gating, snapshotted with PromptPack per turn
   ModelProfile.swift       # capability manifest + fuzzy search (ModelCatalog actor, GET /models); maxCompletionTokens (top_provider.max_completion_tokens, the /messages output ceiling; nil when the manifest doesn't say); supportsVision (T5: OpenRouter `architecture.input_modalities` contains `image`, else the legacy `modality` string's input side; LiteLLM `supports_vision`; `unknownModelId` and the cross-router default **false** — the one capability assumed *off* when unstated, because an image to a text model fails the whole request; `acceptsImages(_:)`); `ModelProfile: Codable` (the cache file's row; `ModelRow` stays the `--json` contract); ModelCatalog(… cache: ManifestCache?, cacheKey:) + `ManifestSource` (network · cache(fetchedAt) · staleCache(fetchedAt)) + `manifestSource`: loadIfNeeded serves a fresh cached copy without a fetch, else `refresh()` (fetch → install → store when non-empty; a failure with nothing served installs the stale copy as `.staleCache`), `profile(for:)` refetches **once per process** for an id a `.cache` copy doesn't know (a model newer than the copy), `refresh()` is `arnes models --refresh`; a catalog without a cache is byte-for-byte the pre-cache one
@@ -6180,5 +6185,31 @@ Bun installs work). `scripts/npm-release.sh` generates the publishable dirs; aut
       prompts and record the next step as private event evidence plus offline reproduction
       before another quality batch. Frozen provenance, verifier results and balanced tool
       transcripts were audited. No runtime or prompt implementation changes.
+- [x] Capture private stream-decoding evidence (2026-09-09) — opt-in
+      `ARNES_STREAM_DIAGNOSTICS_DIR` stores existing typed SDK failures before Session
+      stringification, with dialect/phase/output context. Existing owner-only directories,
+      no-follow traversal, identity checks, exclusive 0600 files, eight slots and bounded
+      scrubbed payloads keep diagnostics private and bounded. JSON CLI output, prompt
+      prefixes and all retry/recovery/default behavior remain unchanged. The SDK supplies
+      normalized decoder input, so unavailable wire framing is labelled explicitly.
+      Offline investigation demonstrates a Linux SwiftOpenAI adapter defect: arbitrary
+      HTTP byte chunks were treated as complete lines, splitting JSON/UTF-8 and inventing
+      delimiters. SwiftOpenAI PR #200 buffers through actual line endings and propagates
+      cancellation; it merged and shipped in 4.6.2, now required by Arnes and selected in
+      its lockfile with no local override or other pin changes. The missing historical live
+      payloads prevent attribution of those
+      failures. Preserve benchmark evidence and prepare only one optional human-operated
+      follow-up; no paid model trial was launched. Validation: 1,922 Swift tests, one
+      skipped, zero failures, including prefix/headless-output goldens and 11 diagnostic
+      regressions; 29 offline Python adapter checks; upstream suites pass 101 tests on macOS
+      and 99 on Linux after seven new stream regressions. Nine disposable network-none
+      Linux CLI cases reproduce
+      all three valid split-response failures on the frozen binary and pass with the isolated
+      upstream fix; malformed/partial input still fails, private capture preserves its decoder
+      input, cancellation closes the socket, and each run emits one JSON result with one
+      request and zero tools. Released-4.6.2 validation repeats the full Mac suite and
+      actual ACP 11/11; the locked static Linux build passes framing 9/9, ACP 11/11 and
+      Harbor 7/7, with all 26 dependency checkouts clean and exact. All 2,926 frozen local
+      evidence files are byte-identical.
 - [ ] OS sandbox: Linux backend (bwrap/landlock); macOS shipped.
 - [ ] Scoreboard-driven routing defaults; gated pack proposals

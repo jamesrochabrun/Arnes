@@ -123,6 +123,8 @@ extension Session {
     /// the CLI reads `policies.transport`. Carried to subagents (`forSubagent`): a nested
     /// session's wire is the same wire. See `TransportPolicy`.
     public var transport: TransportPolicy
+    /// Opt-in private capture of typed stream decoding failures. Never changes recovery.
+    public var streamFailureDiagnostics: (any StreamFailureDiagnostics)?
     /// Model-adaptive `think` omission (T5): when true, a model whose manifest says it reasons
     /// natively **and** whose session has the reasoning dial on (`reasoningEffort` set and not
     /// `.none`) is not offered the `think` scratchpad — its own reasoning is the scratchpad, and
@@ -216,9 +218,11 @@ extension Session {
       packsDirectory: URL? = nil,
       commandDiagnostics: Bool = false,
       maxResponseTokens: Int? = nil,
-      timeBudget: RunTimeBudget? = nil)
+      timeBudget: RunTimeBudget? = nil,
+      streamFailureDiagnostics: (any StreamFailureDiagnostics)? = nil)
     {
       self.model = model ?? provider.defaultModel
+      self.streamFailureDiagnostics = streamFailureDiagnostics
       self.fallbackModels = fallbackModels
       self.maxStepsPerTurn = maxStepsPerTurn
       self.dialect = dialect
@@ -373,7 +377,8 @@ extension Session {
         packsDirectory: packsDirectory,
         commandDiagnostics: commandDiagnostics,
         maxResponseTokens: maxResponseTokens,
-        timeBudget: timeBudget)
+        timeBudget: timeBudget,
+        streamFailureDiagnostics: streamFailureDiagnostics)
     }
 
     /// The `sessionOrigin` of every nested session. The lead's is the caller's to name
