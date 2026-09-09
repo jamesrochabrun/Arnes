@@ -86,25 +86,53 @@ Decision: keep both controls opt-in and the response cap unset by default. The c
 arm showed no quality improvement. Time notices alone and the prompt proposal remain
 untested. These selected tasks are development evidence, not an overall benchmark score.
 
-## Next: verify context preservation before further tuning
+## Recovery screen — 2026-09-09
 
-Fix the confirmed loss of ordinary plaintext chat reasoning at a cutoff. Replay the
-whole supported sequence unchanged, retain the single continuation allowance, and
-continue dropping incomplete tool calls. Avoid extending this change to signed or
-opaque cutoff blocks without evidence that they are complete and replayable. This is
-consistent with OpenRouter's [reasoning replay contract](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens);
-acceptance and usefulness of an interrupted sequence still need a live check.
+Commit `233b40d` preserves ordinary plaintext chat reasoning at a cutoff, replaying the
+whole supported sequence unchanged while retaining one continuation and dropping
+incomplete tool calls. Signed, opaque and native cutoff sequences retain the earlier
+behavior. See OpenRouter's [reasoning replay contract](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens).
+All five CI jobs passed for this code.
 
-After offline validation, screen the revised binary on adaptive-rejection-sampler and
-write-compressor, one attempt each, using the failed time-cap settings above. This is
-two real trials with $1 thresholds each, not a hard $2 batch cap. Compare with the frozen
-time-cap trajectories, explicitly retaining their two-attempt counts. Check replayed
-context, provider acceptance, steps after recovery, required artifacts and final verifier
-results. A faster stop or a replay counter alone is not a quality gain. Do not treat this
-small historical comparison as proof of causality.
+The revised binary ran one real attempt each on adaptive-rejection-sampler and
+write-compressor with the same time-cap settings. The binary SHA256 was
+`c9ea1e500879fab0715a83b5901653d771d5d63601055d2f028956985dae1ac1`.
+Both failed verification; total runtime was 10m 1s and recorded cost was $0.077664.
+There were no Harbor exceptions or Arnes provider errors.
 
-If those trials again stop without implementation progress, stop capped experiments.
-The next quality experiment is the existing early-implementation prompt proposal against
-an uncapped control, with the same model and effort, changing only the pack. If recovery
-does help, repeat a matched comparison with two attempts per arm on all three development
-tasks, then validate on fresh tasks before proposing any default change for human review.
+| Task | Agent duration | End | Calls after first cutoff | Required file | Tests passed |
+| --- | --- | --- | --- | --- | --- |
+| adaptive-rejection-sampler | 292.301s | second cutoff | 0 | ars.R absent | 0/9 |
+| write-compressor | 256.912s | second cutoff | 3 | data.comp absent | 0/3 |
+
+Both transcripts retained the two reasoning-only cutoff messages. Continuations returned
+normal model streams, establishing accepted requests with retained context, not that the
+provider used every reasoning token internally. The compressor resumed environment
+probes, encountered missing xxd and Python executables, and found available alternatives.
+It created no implementation or compressed output. The sampler installed R and then made
+no tool calls after its first cutoff.
+
+Decision: keep the context-preservation fix and stop the 8192-token experiments.
+Additional environment probes do not establish implementation progress or a pass-rate
+improvement. Do not extend the continuation allowance based on this screen. The four
+historical target attempts and two revised attempts have unequal counts and do not
+establish causality.
+
+## Next: uncapped prompt comparison
+
+Use the same `233b40d` binary in both arms, model `deepseek/deepseek-v4-pro-0813`,
+effort `high`, 900 seconds and 100 steps per attempt, one concurrent trial and no retries.
+Disable time notices and leave response tokens unset in both arms. Change only the
+generic early-implementation paragraph: default pack for control and the existing
+`packs-early-implementation` override for the prompt arm. No default pack is changed.
+
+Start with one attempt per task per arm on adaptive-rejection-sampler, write-compressor
+and cancel-async-tasks. This is three real trials per arm, six total, with $1 thresholds
+per trial: $3 per arm and $6 summed thresholds, not hard spending caps. Run a fresh
+control on this binary, inspect its results, then run the prompt arm. The cancellation
+task checks for regressions on a task this model has previously passed.
+
+Judge verifier passes and required outputs first, then time to implementation, validation
+activity, timeout/truncation counts, provider errors and recorded cost. One attempt is
+only a screen. Repeat promising results with matched attempts and check fresh tasks
+before proposing any default change for human review.

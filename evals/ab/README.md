@@ -177,6 +177,12 @@ artifacts. Keep defaults unchanged. The [protocol, findings and next check](time
 separate the confirmed loss of continuation context from unproven prompt/model effects.
 No pack change earned a default flip from this experiment.
 
+The subsequent two-trial recovery screen also passed 0/2. Both trials retained cutoff
+reasoning and received continuation streams; the compressor resumed environment probes,
+but neither task created its required file. Keep the context-preservation fix and stop
+the 8192-token experiments. Next is the existing prompt proposal against a fresh uncapped
+control, with the same binary and model, one attempt on each of three tasks per arm.
+
 ## Results — 2026-09-03 (batch 13, the gateway's `haiku` and `deepseek` aliases, 2 trials per task)
 
 A gateway note first: `--effort` on the **chat** dialect 400s on this LiteLLM route ("reasoning:

@@ -87,6 +87,8 @@ Documentation:
   adapter shell and a loopback provider: private evidence, task permissions, service
   reachability after handoff, deadline/signal cleanup, routed-model transcript capture,
   plaintext cutoff replay and the bounded continuation limit.
+- `evals/ab/time-budget.md` — frozen time-cap and recovery results, decisions and the
+  next uncapped prompt comparison; `evals/ab/packs-early-implementation/` stays a proposal.
 - `Sources/arnes/ACPCommand.swift` — ACP entry point and optional `--state-directory`;
   Runtime accepts that explicit root for config/credentials/cache/spill isolation, skips
   personal retention, and the command injects record/transcript/dialect stores and pack paths.
@@ -6162,5 +6164,13 @@ Bun installs work). `scripts/npm-release.sh` generates the publishable dirs; aut
       including successful scripted recovery and bounded repeated cutoffs. These use zero
       external model calls. The next live screen is two development tasks, one attempt each;
       improved model completion remains unproven.
+- [x] Record the live recovery screen (2026-09-09) — the two revised trials retained
+      cutoff reasoning and received continuation streams but passed 0/2, both ending at
+      their second cutoff without required files. The compressor resumed three environment
+      probes; this did not become implementation progress. Keep the recovery fix and stop
+      the 8192-token experiments. Document the next screen: the existing early-implementation
+      paragraph versus a fresh default control on the same binary/model, no cap or time
+      notices, three tasks once per arm. No runtime or default prompt change. The verifier,
+      transcript and frozen-provenance audit passed; all five CI jobs passed for `233b40d`.
 - [ ] OS sandbox: Linux backend (bwrap/landlock); macOS shipped.
 - [ ] Scoreboard-driven routing defaults; gated pack proposals
