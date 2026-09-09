@@ -30,7 +30,8 @@ async def main():
   fixture = importlib.util.module_from_spec(spec)
   spec.loader.exec_module(fixture)
   reports = []
-  for mode, grace in [("default", 0), ("deadline", 3), ("signal", 30), ("time-aware", 0), ("time-limit", 0)]:
+  for mode, grace in [("default", 0), ("deadline", 3), ("signal", 30), ("time-aware", 0), ("time-limit", 0),
+                      ("cutoff-recovery", 0), ("cutoff-bounded", 0)]:
     root = Path("/logs/agent") / mode
     root.mkdir(parents=True)
     work = Path("/work") / mode
@@ -49,6 +50,13 @@ async def main():
     if mode == "time-limit":
       provider.scripts.clear()
       provider.scripts.append("hold")
+    reasoning = [{"type": "reasoning.text", "text": "Keep the fixture context.", "format": "unknown", "index": 0}]
+    cutoff = {"reasoning_details": reasoning, "finish_reason": "length"}
+    if mode == "cutoff-recovery":
+      provider.scripts.appendleft(cutoff)
+    if mode == "cutoff-bounded":
+      provider.scripts.clear()
+      provider.scripts.extend([cutoff, cutoff])
     async def execute(**kwargs):
       environment = dict(os.environ, **(kwargs.get("env") or {}), ARNES_BASE_URL=provider.url)
       result = await asyncio.to_thread(subprocess.run, ["bash", "-c", kwargs["command"]],
@@ -62,7 +70,7 @@ async def main():
       "ARNES_MODEL": "test/model", "ARNES_EFFORT": "high", "ARNES_MAX_STEPS": "5",
       "ARNES_TIMEOUT": "30", "ARNES_BUDGET": "1", "ARNES_KEEP_ALIVE_SECONDS": str(grace),
     }
-    if mode in {"time-aware", "time-limit"}:
+    if mode in {"time-aware", "time-limit", "cutoff-recovery", "cutoff-bounded"}:
       settings.update(ARNES_TIME_AWARE="true", ARNES_MAX_RESPONSE_TOKENS="8192")
     if mode == "time-limit":
       settings["ARNES_TIMEOUT"] = "2"
@@ -82,6 +90,22 @@ async def main():
         assert "[arnes time budget]" in json.dumps(provider.requests[0]["messages"])
         assert context.metadata["arnes"]["transcript_available"]
         reports.append(dict(mode=mode, checks="passed", scripted_requests=1, external_model_calls=0))
+        continue
+      if mode.startswith("cutoff-"):
+        replay = next(message for message in provider.requests[1]["messages"] if message["role"] == "assistant")
+        assert replay["reasoning_details"] == reasoning, replay
+        assert not replay.get("tool_calls"), replay
+        assert all(request["max_tokens"] == 8192 for request in provider.requests)
+        assert all(request["messages"][0] == provider.requests[0]["messages"][0] for request in provider.requests)
+        assert all(request["tools"] == provider.requests[0]["tools"] for request in provider.requests)
+        transcript = [json.loads(line) for line in (root / "arnes-transcript.jsonl").read_text().splitlines()]
+        assert any(line.get("reasoningDetails") == reasoning for line in transcript)
+      if mode == "cutoff-bounded":
+        assert result["stop_reason"] == "truncated", result
+        assert (root / "arnes-exit-code.txt").read_text().strip() == "3"
+        assert len(provider.requests) == 2
+        assert result["tool_calls"] == 0
+        reports.append(dict(mode=mode, checks="passed", scripted_requests=2, external_model_calls=0))
         continue
       assert result["stop_reason"] == "completed", result
       assert result["tool_calls"] == 3, result
@@ -104,9 +128,10 @@ async def main():
       assert (root / "arnes-exit-code.txt").read_text().strip() == expected
       with socket.socket() as probe:
         assert probe.connect_ex(("127.0.0.1", port)) != 0, "managed service survived cleanup"
-      assert len(provider.requests) == 4, "the grace period must not make model requests"
+      expected_requests = 5 if mode == "cutoff-recovery" else 4
+      assert len(provider.requests) == expected_requests, "the grace period must not make model requests"
       assert result["routed_models"] == ["test/routed"]
-      if mode == "time-aware":
+      if mode in {"time-aware", "cutoff-recovery"}:
         assert all(request.get("max_tokens") == 8192 for request in provider.requests)
         assert any("[arnes time budget]" in json.dumps(message) for message in provider.requests[0]["messages"])
         assert "[arnes time budget]" in (root / "arnes-transcript.jsonl").read_text()
@@ -115,7 +140,7 @@ async def main():
       else:
         assert all("max_tokens" not in request for request in provider.requests)
         assert "[arnes time budget]" not in json.dumps(provider.requests)
-      reports.append(dict(mode=mode, checks="passed", scripted_requests=4, external_model_calls=0))
+      reports.append(dict(mode=mode, checks="passed", scripted_requests=expected_requests, external_model_calls=0))
     finally:
       provider.close()
   Path("/logs/agent/integration.json").write_text(json.dumps(reports, indent=2) + "\n")

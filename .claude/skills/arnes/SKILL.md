@@ -662,6 +662,10 @@ enter history (never executed, never a 400 on the next request), whole calls bef
 the model is told once per turn — `[arnes] Your reply was cut off at the output limit; continue
 from where you stopped, shorter.` (naming a dropped call) — a second cutoff ends the turn with
 `stop_reason: truncated` (exit 3), the partial text kept in history so "continue" works.
+For a chat cutoff without a complete tool call, Arnes also preserves the entire sequence
+of ordinary unsigned `reasoning.text` entries (format absent or `unknown`) on providers
+that replay reasoning. Signed, opaque, mixed and native cutoff sequences retain the
+existing behavior; Arnes does not synthesize missing state or raise the response cap.
 Retries are per step and count `0` as off; evals and panels run the built-in numbers.
 
 ```json

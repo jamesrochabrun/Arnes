@@ -1314,17 +1314,21 @@ public actor Session {
         // The reply hit the output-token limit: what came back is a partial answer, not the
         // model's finish. A tool call the cutoff landed inside of was already dropped in
         // `streamStep`, so nothing half-formed enters history. With no whole call left the model
-        // is asked once per turn to continue shorter (the partial text stays in history, as the
-        // stall nudge keeps it); a second cutoff ends the turn as `truncated` — more of the same
-        // would not fit either, and the user decides what to shorten. Whole calls that survived
-        // run as usual, and the model hears about the cutoff at the next step boundary, through
+        // is asked once per turn to continue shorter. Partial text and replayable plaintext
+        // chat reasoning stay in history so that continuation has context; a second cutoff
+        // ends the turn as `truncated`, leaving further continuation to the caller. Whole calls
+        // that survived run as usual, and the model hears about the cutoff at the next step
+        // boundary, through
         // the turn-local nudge channel the loop guard uses (a step-limit end drops it with the
         // turn instead of landing after the user's next message).
         continuation.yield(.truncated)
         let nudge = OutputTruncation.nudge(droppedToolCall: step.droppedToolCalls.first)
         if step.toolCalls.isEmpty {
-          if !step.text.isEmpty {
-            appendToHistory(.assistant(step.text))
+          let reasoning = dialect == .chat && traits.replaysReasoningDetails
+            ? ReasoningDetails.plaintextAfterTruncation(step.reasoningDetails) : []
+          if !step.text.isEmpty || !reasoning.isEmpty {
+            appendToHistory(Message(role: .assistant, content: .text(step.text),
+              reasoningDetails: reasoning.isEmpty ? nil : reasoning))
           }
           if truncationNudges < OutputTruncation.maxNudgesPerTurn {
             truncationNudges += 1
@@ -2345,7 +2349,8 @@ public actor Session {
   /// Reads `requestHistory()`, so a chat request sends the same view the native dialects do.
   private var chatReplayHistory: [Message] {
     let view = requestHistory()
-    return traits.replaysReasoningDetails ? view : ReasoningDetails.stripped(view)
+    return ReasoningDetails.omittingEmptyAssistantMessages(
+      traits.replaysReasoningDetails ? view : ReasoningDetails.stripped(view))
   }
 
   // MARK: Prompt cache

@@ -4,7 +4,8 @@ import OpenRouterSwift
 
 final class ResponseTokenLimitTests: XCTestCase {
   private func session(_ mock: MockOpenRouterService, model: String = "test/model",
-    limit: Int? = nil, dialect: DialectOverride = .chat, tools: [any AgentTool] = []) -> Session
+    limit: Int? = nil, dialect: DialectOverride = .chat, tools: [any AgentTool] = [],
+    provider: ProviderTraits = .openrouter) -> Session
   {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent("arnes-response-limit-\(UUID())")
     addTeardownBlock { try? FileManager.default.removeItem(at: root) }
@@ -12,7 +13,7 @@ final class ResponseTokenLimitTests: XCTestCase {
       store: RunRecordStore(url: root.appendingPathComponent("runs.jsonl")),
       dialectStore: DialectVerdictStore(url: root.appendingPathComponent("dialects.json")),
       configuration: .init(model: model, dialect: dialect, reasoningEffort: .high,
-        transport: .off, maxResponseTokens: limit))
+        provider: provider, transport: .off, maxResponseTokens: limit))
   }
 
   func testChatLimitUsesManifestCeilingAndIsAbsentByDefault() async throws {
@@ -107,6 +108,12 @@ final class ResponseTokenLimitTests: XCTestCase {
     XCTAssertTrue(mock.requests.allSatisfy { $0.maxTokens == 8192 })
     let record = await subject.lastRecord
     XCTAssertEqual(record?.stopReason, .truncated)
+    let replay = try XCTUnwrap(mock.requests[1].messages.first { $0.role == .assistant })
+    XCTAssertEqual(replay.reasoningDetails?.first?["text"]?.stringValue, "thinking")
+    XCTAssertEqual(record?.reasoningReplayed, 1)
+    let history = await subject.history
+    XCTAssertEqual(history.filter { $0.reasoningDetails?.isEmpty == false }.count, 2,
+      "the last cutoff also survives for an explicit continuation")
     XCTAssertTrue(mock.requests[1].messages.contains { $0.role == .user && $0.content?.plainText.contains("cut off at the output limit") == true })
   }
 
@@ -128,7 +135,8 @@ final class ResponseTokenLimitTests: XCTestCase {
     let mock = MockOpenRouterService()
     mock.manifestJSON = Fixtures.manifest(Fixtures.reasoningManifestModel(id: "test/model"))
     mock.chunkScripts = [
-      [Fixtures.toolCallChunk(id: "cut", name: "spy", arguments: #"{"path":"unfinished"#), Fixtures.finishChunk("length")],
+      [Fixtures.reasoningDetailsChunk(#"[{"type":"reasoning.text","text":"Use the spy.","format":"unknown","index":0}]"#),
+        Fixtures.toolCallChunk(id: "cut", name: "spy", arguments: #"{"path":"unfinished"#), Fixtures.finishChunk("length")],
       [Fixtures.toolCallChunk(id: "whole", name: "spy", arguments: "{}"), Fixtures.finishChunk("tool_calls")],
       [Fixtures.textChunk("done"), Fixtures.usageChunk(cost: 0)],
     ]
@@ -137,5 +145,80 @@ final class ResponseTokenLimitTests: XCTestCase {
     XCTAssertEqual(spy.executions, 1)
     XCTAssertEqual(mock.requests.count, 3)
     XCTAssertTrue(mock.requests.allSatisfy { $0.maxTokens == 8192 })
+    let replay = try XCTUnwrap(mock.requests[1].messages.first { $0.role == .assistant })
+    XCTAssertEqual(replay.reasoningDetails?.first?["text"]?.stringValue, "Use the spy.")
+    XCTAssertNil(replay.toolCalls, "the interrupted call must not survive with its reasoning")
+    XCTAssertFalse(mock.requests.flatMap(\.messages).flatMap { $0.toolCalls ?? [] }.contains { $0.id == "cut" })
+  }
+
+  func testCutoffPreservesTextAndFullReasoningSequence() async throws {
+    let mock = MockOpenRouterService()
+    mock.chunkScripts = [
+      [Fixtures.reasoningDetailsChunk(#"[{"type":"reasoning.text","text":"First ","format":"unknown","index":0}]"#),
+        Fixtures.reasoningDetailsChunk(#"[{"type":"reasoning.text","text":"part.","index":0},{"type":"reasoning.text","text":"Second.","index":1}]"#),
+        Fixtures.textChunk("Partial answer"), Fixtures.finishChunk("length")],
+      [Fixtures.textChunk("done")],
+    ]
+    _ = try await Events.drain(await session(mock).send("go"))
+    let replay = try XCTUnwrap(mock.requests[1].messages.first { $0.role == .assistant })
+    XCTAssertEqual(replay.content?.plainText, "Partial answer")
+    let expected = try JSONDecoder().decode([JSONValue].self, from: Data(
+      #"[{"type":"reasoning.text","text":"First part.","format":"unknown","index":0},{"type":"reasoning.text","text":"Second.","index":1}]"#.utf8))
+    XCTAssertEqual(replay.reasoningDetails, expected)
+    XCTAssertTrue(mock.requests.allSatisfy { $0.maxTokens == nil }, "recovery does not introduce a cap")
+  }
+
+  func testCutoffDoesNotReplayUncertifiedReasoningOrPartOfAMixedSequence() async throws {
+    let plain = #"{"type":"reasoning.text","text":"plain","format":"unknown","index":0}"#
+    let unsupported = [
+      #"{"type":"reasoning.text","text":"unsigned","format":"anthropic-claude-v1","index":1}"#,
+      #"{"type":"reasoning.text","text":"signed","signature":"partial","index":1}"#,
+      #"{"type":"reasoning.encrypted","data":"partial","index":1}"#,
+      #"{"type":"reasoning.summary","summary":"partial","index":1}"#,
+      #"{"type":"reasoning.text","text":"future","format":"future-v1","index":1}"#,
+    ]
+    for entry in unsupported {
+      let mock = MockOpenRouterService()
+      mock.chunkScripts = [
+        [Fixtures.reasoningDetailsChunk("[\(plain),\(entry)]"),
+          Fixtures.textChunk("Partial answer"), Fixtures.finishChunk("length")],
+        [Fixtures.textChunk("done")],
+      ]
+      _ = try await Events.drain(await session(mock).send("go"))
+      let replay = try XCTUnwrap(mock.requests[1].messages.first { $0.role == .assistant })
+      XCTAssertEqual(replay.content?.plainText, "Partial answer")
+      XCTAssertNil(replay.reasoningDetails)
+    }
+  }
+
+  func testCutoffRespectsProvidersThatDoNotReplayReasoning() async throws {
+    let mock = MockOpenRouterService()
+    mock.chunkScripts = [
+      [Fixtures.reasoningDetailsChunk(#"[{"type":"reasoning.text","text":"partial","index":0}]"#), Fixtures.finishChunk("length")],
+      [Fixtures.textChunk("done")],
+    ]
+    let provider = ProviderTraits.forKind(.openaiCompatible, name: "gateway", defaultModel: "test/model", nativeDialects: false)
+    _ = try await Events.drain(await session(mock, provider: provider).send("go"))
+    XCTAssertEqual(mock.requests.count, 2)
+    XCTAssertFalse(mock.requests[1].messages.contains { $0.role == .assistant },
+      "do not send an empty assistant message after stripping unsupported reasoning")
+  }
+
+  func testModelSwapAfterCutoffKeepsHistoryPositionsAndOmitsEmptyAssistantRequests() async throws {
+    let mock = MockOpenRouterService()
+    mock.manifestJSON = Fixtures.manifest(Fixtures.manifestModel(id: "test/model"), Fixtures.manifestModel(id: "test/other"))
+    mock.chunkScripts = (0..<2).map { _ in [
+      Fixtures.reasoningDetailsChunk(#"[{"type":"reasoning.text","text":"partial","index":0}]"#), Fixtures.finishChunk("length"),
+    ] } + [[Fixtures.textChunk("done")]]
+    let subject = session(mock)
+    _ = try await Events.drain(await subject.send("go"))
+    let before = await subject.history
+    _ = try await subject.setModel("test/other")
+    let after = await subject.history
+    XCTAssertEqual(before.map(\.role), after.map(\.role))
+    XCTAssertTrue(after.allSatisfy { $0.reasoningDetails == nil })
+    _ = try await Events.drain(await subject.send("continue"))
+    XCTAssertEqual(mock.requests.count, 3)
+    XCTAssertFalse(mock.requests[2].messages.contains { $0.role == .assistant })
   }
 }

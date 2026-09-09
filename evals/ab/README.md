@@ -169,6 +169,14 @@ arnes evals prune --label think-C          # drop one arm's rows (and their tran
   (`adaptiveThink`'s default) or a sentence edit in `PromptPack.basePrompt`, with the variant
   files regenerated and this file's rule recorded as the reason.
 
+## Results — 2026-09-09 (Terminal-Bench time-budget screening)
+
+Control passed 2/6 attempts; time notices plus an 8,192-token response cap passed 1/6.
+Four capped attempts stopped after two reasoning-only cutoffs without their required
+artifacts. Keep defaults unchanged. The [protocol, findings and next check](time-budget.md)
+separate the confirmed loss of continuation context from unproven prompt/model effects.
+No pack change earned a default flip from this experiment.
+
 ## Results — 2026-09-03 (batch 13, the gateway's `haiku` and `deepseek` aliases, 2 trials per task)
 
 A gateway note first: `--effort` on the **chat** dialect 400s on this LiteLLM route ("reasoning:

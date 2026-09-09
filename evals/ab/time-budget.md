@@ -54,5 +54,57 @@ proposing a default change for human review.
 
 Unit and isolated Linux scripted-provider checks verify request fields, time notices,
 prefix stability, safe truncation handling and service lifecycle. These make zero external
-model calls and cannot establish model-quality improvement. Paid benchmark results are
-pending human-operated runs.
+model calls and cannot establish model-quality improvement.
+
+## Results — 2026-09-09
+
+The frozen control and time-cap arms each ran six real trials, two per task, with the
+settings above. Both used source commit `81b01eb` and binary SHA256
+`bf6cf6bf5f06bd7fef766fad5c0fa70b0c2cc7c3a896de798f2dad19420cc549`.
+
+| Outcome | Control | Time-cap |
+| --- | --- | --- |
+| Passed attempts | 2/6 | 1/6 |
+| Tasks solved at least once | 1/3 | 1/3 |
+| Runtime | 1h 2m 35s | 34m 27s |
+| Recorded model cost | $0.612307 | $0.275381 |
+| Arnes endings | 2 completed, 3 timeout, 1 decoding error | 2 completed, 4 truncated |
+
+Harbor reported zero exceptions in both arms. The separate Arnes decoding error still
+counts as an agent/provider failure; the available logs do not establish its source.
+Interrupted streams can omit final usage, so the recorded cost difference does not
+establish the full billing savings.
+
+Both sampler attempts and both compressor attempts in time-cap stopped after two
+reasoning-only cutoffs, 264–291 seconds into their 900-second allowance, without the
+required implementation or compressed artifact. The continuation request omitted the
+interrupted reasoning. The remaining failure completed but missed an async-cancellation
+cleanup requirement. Two attempts do not establish whether the cap caused that
+correctness difference.
+
+Decision: keep both controls opt-in and the response cap unset by default. The combined
+arm showed no quality improvement. Time notices alone and the prompt proposal remain
+untested. These selected tasks are development evidence, not an overall benchmark score.
+
+## Next: verify context preservation before further tuning
+
+Fix the confirmed loss of ordinary plaintext chat reasoning at a cutoff. Replay the
+whole supported sequence unchanged, retain the single continuation allowance, and
+continue dropping incomplete tool calls. Avoid extending this change to signed or
+opaque cutoff blocks without evidence that they are complete and replayable. This is
+consistent with OpenRouter's [reasoning replay contract](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens);
+acceptance and usefulness of an interrupted sequence still need a live check.
+
+After offline validation, screen the revised binary on adaptive-rejection-sampler and
+write-compressor, one attempt each, using the failed time-cap settings above. This is
+two real trials with $1 thresholds each, not a hard $2 batch cap. Compare with the frozen
+time-cap trajectories, explicitly retaining their two-attempt counts. Check replayed
+context, provider acceptance, steps after recovery, required artifacts and final verifier
+results. A faster stop or a replay counter alone is not a quality gain. Do not treat this
+small historical comparison as proof of causality.
+
+If those trials again stop without implementation progress, stop capped experiments.
+The next quality experiment is the existing early-implementation prompt proposal against
+an uncapped control, with the same model and effort, changing only the pack. If recovery
+does help, repeat a matched comparison with two attempts per arm on all three development
+tasks, then validate on fresh tasks before proposing any default change for human review.

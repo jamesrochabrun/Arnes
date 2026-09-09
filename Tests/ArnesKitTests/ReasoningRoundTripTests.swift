@@ -17,6 +17,29 @@ private final class PingTool: AgentTool, @unchecked Sendable {
 /// dialect's own shape on the next request — or deliberately not, when the request cannot
 /// carry it (the thinking rule, a model swap, a gateway that may reject the field).
 final class ReasoningRoundTripTests: XCTestCase {
+  func testStrippingPreservesHistoryPositionsAndOnlyReplayOmitsEmptyMessages() {
+    let detail: [JSONValue] = [["type": "reasoning.text", "text": "partial"]]
+    let messages: [Message] = [
+      .user("go"),
+      Message(role: .assistant, content: .text(""), reasoningDetails: detail),
+      Message(role: .assistant, content: .text("answer"), reasoningDetails: detail),
+      Message(role: .assistant, toolCalls: [ToolCall(id: "one", type: "function",
+        function: .init(name: "ping", arguments: "{}"))], reasoningDetails: detail),
+      .tool("pong", toolCallId: "one"),
+      Message(role: .assistant, content: .parts([.imageURL(url: "https://example.invalid/image.png")]),
+        reasoningDetails: detail),
+    ]
+    let stripped = ReasoningDetails.stripped(messages)
+    XCTAssertEqual(stripped.count, messages.count, "turn boundaries must keep their history positions")
+    XCTAssertTrue(stripped.allSatisfy { $0.reasoningDetails == nil })
+    let replay = ReasoningDetails.omittingEmptyAssistantMessages(stripped)
+    XCTAssertEqual(replay.count, 5)
+    XCTAssertEqual(replay[1].content?.plainText, "answer")
+    XCTAssertEqual(replay[2].toolCalls?.first?.id, "one")
+    XCTAssertEqual(ReasoningDetails.omittingEmptyAssistantMessages(messages).count, messages.count)
+    XCTAssertEqual(messages[1].reasoningDetails, detail, "the original transcript stays intact")
+  }
+
   private func tempRecordStore() -> RunRecordStore {
     RunRecordStore(url: FileManager.default.temporaryDirectory
       .appendingPathComponent("arnes-reasoning-runs-\(UUID().uuidString).jsonl"))

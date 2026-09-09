@@ -9,6 +9,26 @@ import OpenRouterSwift
 /// the `# Subagents` listing and the `# Delegation` text, the suffix — and the things that must
 /// ride a **user** message instead (notices, the loop guard's nudge, a plan update).
 final class PrefixStabilityTests: XCTestCase {
+  func testCutoffRecoveryAppendsContextWithoutChangingTheRequestPrefix() async throws {
+    let mock = MockOpenRouterService()
+    mock.chunkScripts = [
+      [Fixtures.reasoningDetailsChunk(#"[{"type":"reasoning.text","text":"partial","index":0}]"#), Fixtures.finishChunk("length")],
+      [Fixtures.textChunk("done")],
+    ]
+    let session = Session(service: mock, tools: [ListingTool()], store: tempRecordStore(),
+      configuration: .init(model: "test/model", maxResponseTokens: 8192))
+    _ = try await Events.drain(await session.send("go"))
+    XCTAssertEqual(mock.requests.count, 2)
+    let first = try XCTUnwrap(mock.requests.first)
+    let second = try XCTUnwrap(mock.requests.last)
+    XCTAssertEqual(systemText(first), systemText(second))
+    XCTAssertEqual(try toolBytes(first), try toolBytes(second))
+    XCTAssertEqual(Fixtures.jsonValue(first)["messages"]?.arrayValue,
+      Array(try XCTUnwrap(Fixtures.jsonValue(second)["messages"]?.arrayValue).prefix(first.messages.count)))
+    XCTAssertEqual(second.messages.suffix(2).map(\.role), [.assistant, .user])
+    XCTAssertEqual(second.messages.dropLast().last?.reasoningDetails?.first?["text"]?.stringValue, "partial")
+  }
+
   func testTimeNoticesReachFirstRequestAndThresholdWithoutChangingPrefix() async throws {
     let clock = ManualBudgetClock()
     let budget = RunTimeBudget(seconds: 100, now: { clock.read() })

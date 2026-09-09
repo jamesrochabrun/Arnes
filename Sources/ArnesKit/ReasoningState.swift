@@ -61,15 +61,47 @@ public enum ReasoningDetails {
     value["format"]?.stringValue == format
   }
 
+  /// Plaintext chat reasoning can remain useful after an output cutoff. Opaque or signed
+  /// formats may require a completed block, which a chat cutoff does not certify. Keep the
+  /// entire sequence unchanged only when every entry is ordinary unsigned text; never
+  /// manufacture a block from display deltas or replay a subset of a mixed sequence.
+  static func plaintextAfterTruncation(_ entries: [JSONValue]) -> [JSONValue] {
+    guard entries.allSatisfy({ entry in
+      let format = entry["format"]?.stringValue
+      return entry["type"]?.stringValue == EntryType.text
+        && entry["text"]?.stringValue != nil
+        && (entry["format"] == nil || format == "unknown")
+        && entry["signature"] == nil && entry["data"] == nil
+    }) else { return [] }
+    return entries
+  }
+
   /// The same history with every `reasoningDetails` removed — what a request sends on a
   /// provider that may reject the field, and what a model swap leaves behind (a signed block
-  /// is bound to the model that produced it). Never mutates the input.
+  /// is bound to the model that produced it). Never mutates the input or changes history
+  /// positions: turn boundaries and rewind indices still refer to this array.
   public static func stripped(_ messages: [Message]) -> [Message] {
     messages.map { message in
       guard message.reasoningDetails != nil else { return message }
       var copy = message
       copy.reasoningDetails = nil
       return copy
+    }
+  }
+
+  /// A request-only view after stripping unsupported or model-bound reasoning. Omit an
+  /// assistant that lost its only payload; retain its position in stored history instead.
+  static func omittingEmptyAssistantMessages(_ messages: [Message]) -> [Message] {
+    messages.filter { message in
+      guard message.role == .assistant, message.reasoningDetails?.isEmpty ?? true,
+            message.toolCalls?.isEmpty ?? true else { return true }
+      let emptyContent: Bool
+      switch message.content {
+      case nil: emptyContent = true
+      case .text(let text): emptyContent = text.isEmpty
+      case .parts(let parts): emptyContent = parts.isEmpty
+      }
+      return !emptyContent
     }
   }
 

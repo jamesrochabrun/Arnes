@@ -231,10 +231,12 @@ class Provider:
             # Headers sent, no tokens; cancellation must abort an actual streaming request.
             owner.release.wait(timeout=30)
             return
+          script = dict(script)
+          finish_reason = script.pop("finish_reason", "tool_calls" if "tool_calls" in script else "stop")
           chunk = {"id": "fixture", "model": "test/routed", "choices": [{"index": 0, "delta": script}]}
           self.wfile.write(("data: " + json.dumps(chunk) + "\n\n").encode())
           usage = {"model": "test/routed", "choices": [{"index": 0, "delta": {},
-            "finish_reason": "tool_calls" if "tool_calls" in script else "stop"}],
+            "finish_reason": finish_reason}],
             "usage": {"prompt_tokens": 10, "completion_tokens": 5, "cost": 0.001}}
           self.wfile.write(("data: " + json.dumps(usage) + "\n\ndata: [DONE]\n\n").encode())
           self.wfile.flush()
