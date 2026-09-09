@@ -180,8 +180,11 @@ No pack change earned a default flip from this experiment.
 The subsequent two-trial recovery screen also passed 0/2. Both trials retained cutoff
 reasoning and received continuation streams; the compressor resumed environment probes,
 but neither task created its required file. Keep the context-preservation fix and stop
-the 8192-token experiments. Next is the existing prompt proposal against a fresh uncapped
-control, with the same binary and model, one attempt on each of three tasks per arm.
+the 8192-token experiments. The subsequent uncapped prompt comparison also showed no
+overall gain: 1/3 tasks passed in each arm, with different tasks passing. The prompt
+sampler hit a recurring stream-decoding error, so its failure is not a clean correctness
+comparison. Keep the default prompt; diagnose that transport failure before expanding
+the quality experiment. Full outcomes and limitations are in the linked protocol.
 
 ## Results — 2026-09-03 (batch 13, the gateway's `haiku` and `deepseek` aliases, 2 trials per task)
 

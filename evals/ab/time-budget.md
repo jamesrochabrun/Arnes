@@ -83,8 +83,8 @@ cleanup requirement. Two attempts do not establish whether the cap caused that
 correctness difference.
 
 Decision: keep both controls opt-in and the response cap unset by default. The combined
-arm showed no quality improvement. Time notices alone and the prompt proposal remain
-untested. These selected tasks are development evidence, not an overall benchmark score.
+arm showed no quality improvement. At that point, time notices alone and the prompt
+proposal remained untested. These tasks are development evidence, not an overall benchmark score.
 
 ## Recovery screen — 2026-09-09
 
@@ -118,7 +118,7 @@ improvement. Do not extend the continuation allowance based on this screen. The 
 historical target attempts and two revised attempts have unequal counts and do not
 establish causality.
 
-## Next: uncapped prompt comparison
+## Uncapped prompt comparison — 2026-09-09
 
 Use the same `233b40d` binary in both arms, model `deepseek/deepseek-v4-pro-0813`,
 effort `high`, 900 seconds and 100 steps per attempt, one concurrent trial and no retries.
@@ -136,3 +136,41 @@ Judge verifier passes and required outputs first, then time to implementation, v
 activity, timeout/truncation counts, provider errors and recorded cost. One attempt is
 only a screen. Repeat promising results with matched attempts and check fresh tasks
 before proposing any default change for human review.
+
+Both arms completed with the settings above and passed the frozen-provenance audit.
+The observed routed model was DeepSeek V4 Pro 0813 throughout.
+
+| Outcome | Control | Prompt |
+| --- | --- | --- |
+| Passed tasks | 1/3 | 1/3 |
+| Sampler | 9/9; valid output despite timeout | 0/9; decoding error, no ars.R |
+| Async cancellation | 5/6; completed | 5/6; timeout |
+| Compressor | 0/3; timeout, no data.comp | 3/3; completed |
+| Job runtime | 34m 8s | 41m 35s |
+| Recorded model cost | $0.309945 | $0.285452 |
+
+The prompt compressor produced a correct 2531-byte archive, then refined it to 2371
+bytes, below the 2500-byte requirement. That trajectory fits the implement/validate/refine
+proposal, but one attempt does not establish causality. Both async attempts missed the
+queued-work cancellation-cleanup case. The prompt attempt made 28 tool calls versus
+10 in control and spent 300 seconds in one shell test before its tool timeout.
+
+The prompt sampler installed R, then emitted 173803 characters of reasoning after its
+last tool result before an invalid-JSON decoding failure (358 bytes). It never wrote
+ars.R. The same error class appeared in an earlier control sampler (278 bytes). Its
+origin remains unknown because these logs did not retain the offending payload.
+Harbor reported zero exceptions, but the Arnes result correctly records an agent/provider
+error and exit 1. Keep that failed attempt in the score and report the failure category;
+do not interpret it as a demonstrated prompt-induced correctness regression.
+
+The failed final stream lacks final usage: the sampler's 571 recorded completion tokens
+exclude its long last response. The recorded cost difference therefore does not establish
+billing savings. Neither an exchanged task pass nor this small, confounded sample earns
+a default prompt change.
+
+Decision: retain the default prompt and stop expanding this quality experiment for now.
+Next investigate the recurring stream-decoding failure: capture bounded private evidence
+of the offending event and framing context, reproduce it offline through OpenRouterSwift,
+and distinguish invalid upstream data from a client framing/decoding defect. Fix only
+the demonstrated cause in its owning package; do not silently skip malformed events or
+retry a response after output. Then repeat matched trials before testing fresh tasks.

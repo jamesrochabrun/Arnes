@@ -87,8 +87,8 @@ Documentation:
   adapter shell and a loopback provider: private evidence, task permissions, service
   reachability after handoff, deadline/signal cleanup, routed-model transcript capture,
   plaintext cutoff replay and the bounded continuation limit.
-- `evals/ab/time-budget.md` — frozen time-cap and recovery results, decisions and the
-  next uncapped prompt comparison; `evals/ab/packs-early-implementation/` stays a proposal.
+- `evals/ab/time-budget.md` — frozen time-cap, recovery and uncapped prompt results,
+  decisions and diagnostic follow-up; `evals/ab/packs-early-implementation/` stays a proposal.
 - `Sources/arnes/ACPCommand.swift` — ACP entry point and optional `--state-directory`;
   Runtime accepts that explicit root for config/credentials/cache/spill isolation, skips
   personal retention, and the command injects record/transcript/dialect stores and pack paths.
@@ -6172,5 +6172,13 @@ Bun installs work). `scripts/npm-release.sh` generates the publishable dirs; aut
       paragraph versus a fresh default control on the same binary/model, no cap or time
       notices, three tasks once per arm. No runtime or default prompt change. The verifier,
       transcript and frozen-provenance audit passed; all five CI jobs passed for `233b40d`.
+- [x] Record the uncapped prompt comparison (2026-09-09) — control and prompt each passed
+      1/3 tasks, with the sampler passing control and the compressor passing prompt.
+      Both missed queued-work cancellation cleanup. The prompt sampler ended in a recurring
+      invalid-JSON stream-decoding failure; its last response lacks final usage, so neither
+      the failure nor the lower recorded cost establishes a prompt effect. Preserve default
+      prompts and record the next step as private event evidence plus offline reproduction
+      before another quality batch. Frozen provenance, verifier results and balanced tool
+      transcripts were audited. No runtime or prompt implementation changes.
 - [ ] OS sandbox: Linux backend (bwrap/landlock); macOS shipped.
 - [ ] Scoreboard-driven routing defaults; gated pack proposals
