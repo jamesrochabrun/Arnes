@@ -69,14 +69,15 @@ requested slug.
 chosen per request, so the requested slug would say nothing about what answered and no two
 runs would be guaranteed comparable. Set `ARNES_ROUTER_ALIAS=true` when the router *is* the
 experiment; the opt-in is recorded in provenance so the evidence says a router chose. Harbor's
-`--model` must still match `ARNES_MODEL`. An alias is not in the manifest, so such a run gets
-the assumed profile:
-no reasoning parameter whatever `ARNES_EFFORT` says, the generic prompt pack, the chat
-dialect and no `view_image`. An alias arm is therefore not comparable to a fixed-model arm
-at the same effort — the run announces the dropped dial as a `setting_ignored` event in
-`arnes-events.jsonl`, and `routing_report.py` flags any trial carrying it. The arms, metrics
-and publication rules for such a run are in `evals/ab/model-routing.md` (local, Git-ignored,
-like every Harbor protocol here); read it before running or publishing one.
+`--model` must still match `ARNES_MODEL`. `openrouter/auto` is itself a manifest row, so such a
+run keeps reasoning and vision — verified live: the effort dial is delivered and only `think` is
+withheld. What it loses is the family prompt pack and any native dialect, because both key off
+the requested slug rather than the model that answers. Its manifest price is `-1` ("varies with
+whatever it picks"), which `ModelProfile.price` treats as no price at all, so a fallback
+estimate declines instead of returning a negative cost; real cost still comes from the
+provider's usage. The arms, metrics and publication rules for an alias arm are in
+`evals/ab/model-routing.md` (local, Git-ignored, like every Harbor protocol here); read it
+before running or publishing one.
 
 For the guidance arm, set `ARNES_PACKS_DIR=evals/ab/packs-tool-guidance` on the host.
 The adapter copies Markdown and tool-guidance JSON files into the container and records

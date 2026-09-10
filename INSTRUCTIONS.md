@@ -4178,6 +4178,18 @@ Bun installs work). `scripts/npm-release.sh` generates the publishable dirs; aut
       evidence instead of inferring it from absent reasoning. No default, flag or wire shape
       changed — a run that was already delivering its dial is byte-identical, pinned by
       `HeadlessOutputTests`' golden lines. (1928 tests, +6.)
+- [x] A price the manifest states as negative is not a price — `ModelProfile.price`. The
+      router alias prices its tokens `-1` ("varies with whatever it picks"), and `Double.init`
+      took that literally: `Session.estimatedCost` multiplied tokens by a negative rate, so a
+      fallback estimate came back as a *refund*. Nothing had noticed because `usage.cost` is
+      read first and normally arrives; the fallback is exactly the interrupted-response case the
+      Harbor protocol already warns about, and there the session's cumulative spend would walk
+      backwards and `costUSD >= maxCostUSD` would never trip — a `--budget` ceiling silently not
+      enforcing, in runs that hold `--yes --add-dir /` inside a container. Both manifest paths
+      (OpenRouter's pricing strings, the gateway's `input_cost_per_token`) now go through one
+      rule: non-finite or negative is nil, and `estimatedCost` declines to guess rather than
+      guessing a refund. Zero is still a price — a free model is free. Found by reading the
+      manifest row the pilot's routed model came from. (1929 tests, +1.)
 - [x] The Harbor adapter can run the router it was built to refuse — `ARNES_ROUTER_ALIAS`.
       `benchmark_contract` rejected `openrouter/auto` outright, and rightly: the model would be
       chosen per request, so the requested slug says nothing about what answered and no two runs
@@ -4192,13 +4204,15 @@ Bun installs work). `scripts/npm-release.sh` generates the publishable dirs; aut
 - [x] Router evaluation tooling — `openrouter/auto` versus fixed models, prepared but unrun.
       Every completed Harbor comparison so far pinned one model, so nothing measured what the
       router alias actually does. Four harness consequences make an alias arm *not* a
-      like-for-like arm, and they are properties of the assumed profile an unknown model gets
-      (`ModelProfile(unknownModelId:)`), not defects: `supportsReasoning = false` means every
-      reasoning path (`Session.swift:2405/2415/2420/2429`) drops the requested `--effort`;
-      family `.other` means the generic pack, not a tuned one; the dialect resolves to chat;
-      `supportsVision = false` withholds `view_image`. Cost is unaffected — `Session.cost(of:model:)`
-      takes the provider's `usage.cost` before estimating (`Session.swift:2667`) — so an alias
-      trial recording `cost_estimated: true` is unusable evidence and is flagged as such.
+      like-for-like arm. **Two of the four consequences first written here were wrong**, and the
+      pilot is what corrected them: `openrouter/auto` is a manifest row, not an unknown model, so
+      it keeps reasoning (the dial is delivered — 339/2,094/12,254 reasoning characters observed)
+      and vision (`input_modalities` carries `image`; only `think` was withheld). What holds is
+      that family comes from the *slug's* author prefix — `.other`, the generic pack — and the
+      dialect resolves to chat, both because they key off the requested slug and never the model
+      that answers. Cost is unaffected — `Session.cost(of:model:)` takes the provider's
+      `usage.cost` before estimating — so a trial recording `cost_estimated: true` is unusable
+      evidence and is flagged as such.
       `benchmarks/terminal-bench/routing_report.py` turns a set of labelled Harbor jobs into the
       comparison: it reads the `routed` events (model **and** upstream provider, emitted on
       change, so mid-run switches are visible where `routed_models` alone would hide them),

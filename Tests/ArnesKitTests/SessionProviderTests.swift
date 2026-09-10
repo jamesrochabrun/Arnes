@@ -101,4 +101,26 @@ final class SessionProviderTests: XCTestCase {
     XCTAssertNil(Session.estimatedCost(promptTokens: nil, completionTokens: nil, profile: priced))
     XCTAssertNil(Session.estimatedCost(promptTokens: 10, completionTokens: 5, profile: nil))
   }
+
+  /// A router alias prices its tokens as `-1` — "varies with whatever it picks". Taken at face
+  /// value that is a *negative* estimate: the session's spend walks backwards and `--budget`
+  /// never trips. Observed live on `openrouter/auto`, whose manifest row reads
+  /// `pricing: {prompt: "-1", completion: "-1"}`.
+  func testVariablePricingIsNotAPrice() {
+    XCTAssertNil(ModelProfile.price("-1"), "the router alias sentinel")
+    XCTAssertNil(ModelProfile.price("-0.000001"))
+    XCTAssertNil(ModelProfile.price("nan"))
+    XCTAssertNil(ModelProfile.price("inf"))
+    XCTAssertNil(ModelProfile.price(nil))
+    XCTAssertEqual(ModelProfile.price("0"), 0, "a genuinely free model is still priced")
+    XCTAssertEqual(try XCTUnwrap(ModelProfile.price("1e-6")), 1e-6, accuracy: 1e-18)
+    // End to end: a profile carrying the sentinel declines to estimate rather than refunding.
+    let variable = ModelProfile(
+      id: "openrouter/auto", contextLength: nil, supportsTools: true, supportsReasoning: true,
+      supportsStructuredOutputs: true,
+      promptPricePerToken: ModelProfile.price("-1"),
+      completionPricePerToken: ModelProfile.price("-1"))
+    XCTAssertNil(Session.estimatedCost(promptTokens: 10_000, completionTokens: 5_000,
+                                       profile: variable))
+  }
 }

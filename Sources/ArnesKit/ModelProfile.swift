@@ -43,11 +43,26 @@ public struct ModelProfile: Codable, Sendable {
     supportsReasoning = parameters.contains("reasoning") || parameters.contains("include_reasoning")
     supportsStructuredOutputs = parameters.contains("response_format")
       || parameters.contains("structured_outputs")
-    promptPricePerToken = model.pricing?.prompt.flatMap(Double.init)
-    completionPricePerToken = model.pricing?.completion.flatMap(Double.init)
+    promptPricePerToken = Self.price(model.pricing?.prompt)
+    completionPricePerToken = Self.price(model.pricing?.completion)
     maxCompletionTokens = model.topProvider?.maxCompletionTokens
     supportsMaxCompletionTokens = model.supportedParameters.map { $0.contains("max_completion_tokens") }
     supportsVision = Self.acceptsImages(model.architecture)
+  }
+
+  /// A manifest price, or nil when the manifest isn't stating one. A router alias prices its
+  /// tokens as `-1` (OpenRouter's "varies with the model it picks"), and a negative or
+  /// non-finite price is not a price: left in, it makes an estimate *negative*, which walks the
+  /// session's spend backwards and stops `--budget` from ever tripping. Cost still comes from
+  /// the provider's `usage.cost` first (`Session.cost(of:model:)`); this only governs the
+  /// fallback estimate, which now declines to guess instead of guessing a refund.
+  static func price(_ raw: String?) -> Double? {
+    raw.flatMap(Double.init).flatMap(usablePrice)
+  }
+
+  /// The numeric half of `price(_:)`, shared with the gateway manifest path.
+  static func usablePrice(_ value: Double) -> Double? {
+    value.isFinite && value >= 0 ? value : nil
   }
 
   /// `input_modalities` when the manifest has it; else the input side of the legacy `modality`

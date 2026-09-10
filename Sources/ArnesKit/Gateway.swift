@@ -244,8 +244,9 @@ public struct LiteLLMModelInfo: Decodable, Sendable {
       supportsTools: info?.supportsFunctionCalling ?? true,
       supportsReasoning: info?.supportsReasoning ?? false,
       supportsStructuredOutputs: info?.supportsResponseSchema ?? false,
-      promptPricePerToken: info?.inputCostPerToken,
-      completionPricePerToken: info?.outputCostPerToken,
+      // Same rule as the OpenRouter manifest: a negative or non-finite price is not a price.
+      promptPricePerToken: info?.inputCostPerToken.flatMap(ModelProfile.usablePrice),
+      completionPricePerToken: info?.outputCostPerToken.flatMap(ModelProfile.usablePrice),
       // `max_tokens` is the output cap only when `max_input_tokens` is there to be the context
       // length; alone it stands in for the context length above and caps nothing.
       maxCompletionTokens: info?.maxInputTokens != nil ? info?.maxTokens : nil,
