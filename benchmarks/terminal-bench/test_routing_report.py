@@ -181,6 +181,23 @@ class RoutingReportTests(unittest.TestCase):
     self.assertFalse(document["comparability"]["binary_sha256"]["consistent"])
     self.assertIn("comparison is confounded", routing_report.render(document))
 
+  def test_disjoint_provider_pools_are_called_out(self):
+    """Two arms naming the same model can still draw from entirely different providers."""
+    auto, pinned = self.root / "auto", self.root / "pinned"
+    make_trial(auto, "alpha", routed=("m",), providers=["Together"])
+    make_trial(pinned, "alpha", routed=("m",), providers=["Novita"])
+    document = routing_report.build({"auto": auto, "pinned": pinned}, "auto")
+    text = routing_report.render(document)
+    self.assertIn("Upstream provider pools", text)
+    self.assertIn("no upstream provider at all", text)
+
+  def test_shared_provider_pools_say_so(self):
+    auto, pinned = self.root / "auto", self.root / "pinned"
+    make_trial(auto, "alpha", routed=("m",), providers=["Together"])
+    make_trial(pinned, "alpha", routed=("m",), providers=["Together"])
+    text = routing_report.render(routing_report.build({"auto": auto, "pinned": pinned}, "auto"))
+    self.assertIn("Arms share Together.", text)
+
   def test_render_is_plain_markdown(self):
     auto, fixed = self.root / "auto", self.root / "fixed"
     make_trial(auto, "alpha", passed=True)

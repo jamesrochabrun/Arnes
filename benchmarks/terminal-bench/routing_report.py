@@ -168,6 +168,12 @@ def summarize_arm(label, rows):
     median_duration_seconds=median([row["duration_seconds"] for row in scored]),
     median_steps=median([row["steps"] for row in scored]),
     routed_models=sorted({model for row in rows for model in row["routed_models"]}),
+    # The upstream provider pool this arm actually reached. Two arms naming the same model can
+    # still draw from disjoint pools — observed on 2026-09-10, where `openrouter/auto` and the
+    # model it picks were served by entirely different providers — and then a difference between
+    # them is provider assignment, not the thing the arms were meant to isolate.
+    providers=sorted({name for row in rows for name in row["providers"]}),
+    timeouts=sum(1 for row in rows if row["stop_reason"] == "timeout"),
     flagged_trials=sum(1 for row in rows if row["flags"]),
     flags=dict(Counter(flag for row in rows for flag in row["flags"])))
 
@@ -323,6 +329,19 @@ def render(document):
       lines.append(f"| {pair['other']} | {pair['paired_cells']} | {pair['both_passed']} | "
                    f"{pair['only_reference_passed']} | {pair['only_other_passed']} | "
                    f"{probability} | {ratio} |")
+  pools = {summary["arm"]: set(summary["providers"]) for summary in document["summaries"]
+           if summary["providers"]}
+  if len(pools) > 1:
+    lines += ["", "## Upstream provider pools", "",
+              "| arm | providers | timeouts |", "| --- | --- | ---: |"]
+    for summary in document["summaries"]:
+      lines.append(f"| {summary['arm']} | {', '.join(summary['providers']) or 'n/a'} | "
+                   f"{summary['timeouts']} |")
+    shared = set.intersection(*pools.values())
+    lines += ["", "Arms share " + (f"{', '.join(sorted(shared))}." if shared else
+                                   "**no upstream provider at all** — any difference between them "
+                                   "is provider assignment as much as the variable under test, "
+                                   "and cannot be attributed to that variable alone.")]
   oracle = document["oracle"]
   lines += ["", "## Oracle gap", "",
             f"Tasks at least one arm solved: {oracle['tasks_any_arm_solved']}", "",
