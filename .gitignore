@@ -6,3 +6,12 @@ xcuserdata/
 
 # Agent worktrees (Claude Code isolation) live inside the checkout
 .claude/worktrees/
+
+# Local Harbor experiment reports, protocols and unpromoted prompt proposals
+/evals/ab/effort.md
+/evals/ab/harbor-retest.md
+/evals/ab/interface-check.md
+/evals/ab/stream-framing-results.md
+/evals/ab/harbor-local-notes.md
+/evals/ab/model-routing.md
+/evals/ab/packs-interface-check/

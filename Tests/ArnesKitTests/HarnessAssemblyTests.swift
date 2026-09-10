@@ -262,6 +262,7 @@ final class HarnessAssemblyTests: XCTestCase {
       .userQuestion(question: "Which one?", options: ["a", "b"]),
       .structuredOutput(json: ["ok": true], valid: true, errors: []),
       .routed(model: "m", provider: nil), .dialectFellBack(dialect: "messages", reason: "x"),
+      .settingIgnored(setting: "effort", reason: "the manifest doesn't advertise reasoning"),
       .interrupted, .nudged(reason: "empty"), .stepLimitReached(maxSteps: 3),
       .budgetReached(spentUSD: 1, budgetUSD: 1), .hookNotice(event: "Stop", output: "o"),
       .hookBlocked(tool: "bash", reason: "no"), .hookStopped(reason: nil),

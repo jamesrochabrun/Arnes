@@ -252,6 +252,10 @@ public actor Session {
   /// The live effort dial (`/effort`), seeded from the configuration in both inits — the
   /// configuration itself is immutable, so the dials that move mid-session live here.
   private var reasoningEffortOverride: Reasoning.Effort?
+  /// The last `.settingIgnored` reason announced, so the notice is said once rather than every
+  /// turn — and said again when a `/model` or `/effort` change makes it true for a new reason.
+  /// nil means nothing is currently being dropped.
+  private var announcedSettingNotice: String?
   /// The live cost ceiling (`/budget`), seeded from `configuration.maxCostUSD`; what the loop's
   /// budget check compares the cumulative spend against. nil = no ceiling.
   private var budgetUSD: Double?
@@ -1006,6 +1010,22 @@ public actor Session {
     {
       dialect = .chat
     }
+
+    // A dial the request will not carry is said once, here — where the model, the profile and
+    // the *resolved* dialect are all known, so the notice describes the request that is about
+    // to go out rather than the one the flags asked for. Re-announced when a `/model`,
+    // `/effort` or dialect change makes it true differently; cleared when it stops being true,
+    // so a later drop is announced again. It rides an event, never the system prompt.
+    let ignoredSetting = Self.reasoningNotice(
+      effort: reasoningEffort, model: model, profile: profile, dialect: dialect,
+      shape: traits.reasoningShape)
+    if ignoredSetting != announcedSettingNotice {
+      announcedSettingNotice = ignoredSetting
+      if let ignoredSetting {
+        continuation.yield(.settingIgnored(setting: "effort", reason: ignoredSetting))
+      }
+    }
+
     var record = RunRecord(
       task: text,
       model: model,
@@ -2395,6 +2415,38 @@ public actor Session {
 
   // MARK: Reasoning effort
 
+  /// Whether a request built for `profile` on `dialect` under `shape` carries a reasoning dial
+  /// at all. The single predicate behind all four request gates below *and* the notice a run
+  /// prints, so what the user is told and what goes on the wire cannot drift apart.
+  ///
+  /// Two conditions drop it, neither an error: the manifest not advertising reasoning for the
+  /// model (an alias like `openrouter/auto` is not a manifest model, so `ModelProfile(unknownModelId:)`
+  /// assumes it doesn't reason), and — on **chat** only — a provider whose `reasoningShape` is
+  /// `.none`, which takes no reasoning field in either spelling.
+  public static func carriesReasoning(
+    profile: ModelProfile, dialect: Dialect, shape: ReasoningShape) -> Bool
+  {
+    guard profile.supportsReasoning else { return false }
+    return !(dialect == .chat && shape == .none)
+  }
+
+  /// Why a requested effort will not reach the model, or nil when the request carries it (or
+  /// no dial is set). The user-facing half of `carriesReasoning`; `AgentEvent.settingIgnored`
+  /// carries it, and it names the flag, never the value.
+  public static func reasoningNotice(
+    effort: Reasoning.Effort?, model: String, profile: ModelProfile, dialect: Dialect,
+    shape: ReasoningShape) -> String?
+  {
+    guard let effort, !carriesReasoning(profile: profile, dialect: dialect, shape: shape)
+    else { return nil }
+    if !profile.supportsReasoning {
+      return "the manifest doesn't advertise reasoning for \(model), so effort "
+        + "\(effort.rawValue) is not sent (an alias or unlisted model is assumed not to reason)"
+    }
+    return "this provider takes no reasoning field on the chat dialect "
+      + "(provider.reasoningShape = none), so effort \(effort.rawValue) is not sent"
+  }
+
   /// OpenRouter's `reasoning` object for a chat request — nil unless the dial is set *and* the
   /// model advertises reasoning support, so a model that doesn't understand it never receives
   /// it, *and* the provider speaks that spelling (`ProviderTraits.reasoningShape == .openrouter`):
@@ -2402,7 +2454,9 @@ public actor Session {
   /// not permitted`) and takes `chatReasoningEffort` instead; `.none` sends neither, so the dial
   /// applies to no chat request there (the native dialects have their own shapes).
   private func chatReasoning(profile: ModelProfile) -> Reasoning? {
-    guard traits.reasoningShape == .openrouter, let reasoningEffort, profile.supportsReasoning else { return nil }
+    guard traits.reasoningShape == .openrouter, let reasoningEffort,
+          Self.carriesReasoning(profile: profile, dialect: .chat, shape: traits.reasoningShape)
+    else { return nil }
     return Reasoning(effort: reasoningEffort)
   }
 
@@ -2412,12 +2466,16 @@ public actor Session {
   /// `reasoningShape == .openai`. The level rides verbatim (`Reasoning.Effort.rawValue`), never
   /// remapped: a level the gateway rejects is the gateway's message to the user.
   private func chatReasoningEffort(profile: ModelProfile) -> Reasoning.Effort? {
-    guard traits.reasoningShape == .openai, let reasoningEffort, profile.supportsReasoning else { return nil }
+    guard traits.reasoningShape == .openai, let reasoningEffort,
+          Self.carriesReasoning(profile: profile, dialect: .chat, shape: traits.reasoningShape)
+    else { return nil }
     return reasoningEffort
   }
 
   private func responsesReasoning(profile: ModelProfile) -> ResponsesReasoning? {
-    guard let reasoningEffort, profile.supportsReasoning else { return nil }
+    guard let reasoningEffort,
+          Self.carriesReasoning(profile: profile, dialect: .responses, shape: traits.reasoningShape)
+    else { return nil }
     return ResponsesReasoning(effort: reasoningEffort)
   }
 
@@ -2426,7 +2484,9 @@ public actor Session {
   /// bumped `max_tokens`. The budget here is the dial's; the request clamps it under the
   /// manifest's output ceiling (`messagesRequestShape`).
   private func messagesThinking(profile: ModelProfile) -> Thinking? {
-    guard let reasoningEffort, profile.supportsReasoning else { return nil }
+    guard let reasoningEffort,
+          Self.carriesReasoning(profile: profile, dialect: .messages, shape: traits.reasoningShape)
+    else { return nil }
     guard reasoningEffort != .none else { return .disabled }
     return .enabled(budgetTokens: Self.thinkingBudget(for: reasoningEffort))
   }

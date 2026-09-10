@@ -205,6 +205,10 @@ final class Renderer {
       endStreamedLineIfNeeded()
       line(ANSI.yellow(clean("⤵ \(dialect) dialect failed (\(String(reason.prefix(80)))) — fell back to chat")))
 
+    case .settingIgnored(let setting, let reason):
+      endStreamedLineIfNeeded()
+      line(ANSI.yellow(clean("⚠ --\(setting) has no effect: \(reason)")))
+
     case .verifier(let passed, let verdict):
       line(passed ? ANSI.green(clean("✔ \(verdict)")) : ANSI.red(clean("✘ \(verdict)")))
 
@@ -425,6 +429,9 @@ final class Renderer {
 
     case .dialectFellBack(let dialect, _):
       line(ANSI.dim("  ⤵ \(dialect) fell back to chat"))
+
+    case .settingIgnored(let setting, let reason):
+      line(ANSI.dim(clean("  ⚠ --\(setting) has no effect: \(reason)")))
 
     case .nudged:
       if verbose {

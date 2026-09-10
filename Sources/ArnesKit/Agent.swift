@@ -71,6 +71,17 @@ public enum AgentEvent: Sendable {
   /// A native dialect misbehaved before producing output; the step reran on chat
   /// and the failure was recorded so future auto runs skip the broken endpoint.
   case dialectFellBack(dialect: String, reason: String)
+  /// A setting the run asked for cannot reach this model, so the request does not carry it —
+  /// the dial is accepted and then inert. Said once per session per distinct `reason`, and
+  /// again when a dial or model change makes it true differently (`/effort`, `/model`).
+  ///
+  /// Today's one source is the reasoning effort (`Session.reasoningDelivery`): a model whose
+  /// manifest doesn't advertise reasoning never receives the field — an alias such as
+  /// `openrouter/auto` is not a manifest model, so it is assumed not to reason — and on the
+  /// chat dialect a provider whose `reasoningShape` is `.none` takes no reasoning field at
+  /// all. Both used to be silent, which quietly invalidates any comparison that believed it
+  /// ran at the effort it asked for. `setting` is the flag's name (`effort`), never a value.
+  case settingIgnored(setting: String, reason: String)
   /// The turn was cancelled (Ctrl-C / `Session.interrupt`).
   case interrupted
   /// The model stopped without calling a tool or delivering a result (empty reply,
@@ -178,6 +189,7 @@ extension AgentEvent {
     case structuredOutput = "structured_output"
     case routed
     case dialectFellBack = "dialect_fell_back"
+    case settingIgnored = "setting_ignored"
     case interrupted
     case nudged
     case stepLimitReached = "step_limit"
@@ -219,6 +231,7 @@ extension AgentEvent {
     case .structuredOutput: return .structuredOutput
     case .routed: return .routed
     case .dialectFellBack: return .dialectFellBack
+    case .settingIgnored: return .settingIgnored
     case .interrupted: return .interrupted
     case .nudged: return .nudged
     case .stepLimitReached: return .stepLimitReached

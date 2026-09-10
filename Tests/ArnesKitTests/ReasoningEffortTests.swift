@@ -143,4 +143,97 @@ final class ReasoningEffortTests: XCTestCase {
       XCTAssertGreaterThanOrEqual(capped.budget ?? 0, MessagesTranslator.minimumThinkingBudget)
     }
   }
+
+  // MARK: The dropped-dial notice (`AgentEvent.settingIgnored`)
+
+  private func profile(supportsReasoning: Bool) -> ModelProfile {
+    ModelProfile(
+      id: "test/model", family: .other, contextLength: 8000, supportsTools: true,
+      supportsReasoning: supportsReasoning, supportsStructuredOutputs: false,
+      promptPricePerToken: nil, completionPricePerToken: nil)
+  }
+
+  /// The predicate the four request gates read is the same one the notice reads.
+  func testCarriesReasoningMatchesTheTwoWireGates() {
+    let reasons = profile(supportsReasoning: true)
+    let silent = profile(supportsReasoning: false)
+    XCTAssertTrue(Session.carriesReasoning(profile: reasons, dialect: .chat, shape: .openrouter))
+    XCTAssertTrue(Session.carriesReasoning(profile: reasons, dialect: .chat, shape: .openai))
+    // Chat + a provider that takes neither spelling: the dial reaches no request.
+    XCTAssertFalse(Session.carriesReasoning(profile: reasons, dialect: .chat, shape: .none))
+    // A native dialect carries its own shape, so the provider's chat spelling is irrelevant.
+    XCTAssertTrue(Session.carriesReasoning(profile: reasons, dialect: .messages, shape: .none))
+    XCTAssertTrue(Session.carriesReasoning(profile: reasons, dialect: .responses, shape: .none))
+    // A model the manifest doesn't call a reasoner never receives it, on any dialect.
+    for dialect in [Dialect.chat, .messages, .responses] {
+      XCTAssertFalse(Session.carriesReasoning(profile: silent, dialect: dialect, shape: .openrouter))
+    }
+  }
+
+  /// An alias like `openrouter/auto` is not in the manifest, so it gets the assumed profile
+  /// and the dial is dropped — the case that silently invalidated effort comparisons.
+  func testUnknownModelProfileNeverCarriesTheDial() {
+    let assumed = ModelProfile(unknownModelId: "openrouter/auto")
+    XCTAssertFalse(assumed.supportsReasoning)
+    XCTAssertFalse(Session.carriesReasoning(profile: assumed, dialect: .chat, shape: .openrouter))
+    let notice = Session.reasoningNotice(
+      effort: .high, model: "openrouter/auto", profile: assumed, dialect: .chat, shape: .openrouter)
+    XCTAssertEqual(notice, "the manifest doesn't advertise reasoning for openrouter/auto, so "
+      + "effort high is not sent (an alias or unlisted model is assumed not to reason)")
+  }
+
+  func testNoticeIsNilWhenTheDialIsUnsetOrDelivered() {
+    XCTAssertNil(Session.reasoningNotice(
+      effort: nil, model: "test/model", profile: profile(supportsReasoning: false),
+      dialect: .chat, shape: .openrouter), "no dial set, nothing to say")
+    XCTAssertNil(Session.reasoningNotice(
+      effort: .high, model: "test/model", profile: profile(supportsReasoning: true),
+      dialect: .chat, shape: .openrouter), "the request carries it")
+  }
+
+  func testNoticeNamesTheChatShapeWhenThatIsWhatDropsIt() {
+    let notice = Session.reasoningNotice(
+      effort: .low, model: "test/model", profile: profile(supportsReasoning: true),
+      dialect: .chat, shape: .none)
+    XCTAssertEqual(notice, "this provider takes no reasoning field on the chat dialect "
+      + "(provider.reasoningShape = none), so effort low is not sent")
+  }
+
+  private func events(effort: Reasoning.Effort?, supportsReasoning: Bool, turns: Int = 1)
+    async throws -> [AgentEvent]
+  {
+    let mock = MockOpenRouterService()
+    mock.manifestJSON = reasoningManifest(supportsReasoning: supportsReasoning)
+    mock.chunkScripts = Array(
+      repeating: [Fixtures.textChunk("hi"), Fixtures.usageChunk(cost: 0)], count: turns)
+    let session = Session(
+      service: mock, tools: [], store: tempStore(),
+      configuration: .init(model: "test/model", reasoningEffort: effort))
+    var collected: [AgentEvent] = []
+    for turn in 0..<turns {
+      for try await event in await session.send("go \(turn)") { collected.append(event) }
+    }
+    return collected
+  }
+
+  private func ignored(_ events: [AgentEvent]) -> [(setting: String, reason: String)] {
+    events.compactMap {
+      if case .settingIgnored(let setting, let reason) = $0 { return (setting, reason) }
+      return nil
+    }
+  }
+
+  func testDroppedEffortIsAnnouncedOnceWithTheFlagName() async throws {
+    let notices = ignored(try await events(effort: .high, supportsReasoning: false, turns: 2))
+    XCTAssertEqual(notices.count, 1, "said once per session, not once per turn")
+    XCTAssertEqual(notices.first?.setting, "effort", "names the flag, never the value")
+    XCTAssertTrue(notices.first?.reason.contains("doesn\'t advertise reasoning") ?? false)
+  }
+
+  func testDeliveredOrUnsetEffortSaysNothing() async throws {
+    let delivered = ignored(try await events(effort: .high, supportsReasoning: true))
+    XCTAssertTrue(delivered.isEmpty, "a dial that reaches the model is not a notice")
+    let unset = ignored(try await events(effort: nil, supportsReasoning: false))
+    XCTAssertTrue(unset.isEmpty, "no dial set, nothing was ignored")
+  }
 }

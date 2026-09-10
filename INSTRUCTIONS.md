@@ -69,7 +69,12 @@ Documentation:
   preserves task umask and hands off completed results during a bounded service grace period;
   `benchmark_contract.py` bounds host pack inputs, records opt-in time notices and response
   token limits in schema-4 provenance, and parses results; `check_verification.py` audits pytest/CTRF outcomes separately
-  from missing verifier reports; `preflight-verifier.sh` checks the development batch's
+  from missing verifier reports; `routing_report.py` compares labelled arms across Harbor jobs —
+  the `routed` event timeline (model + upstream provider), pass rate, cost per solved task,
+  (task, repetition) pairing with an exact McNemar p, the oracle gap and per-trial publishability
+  flags (`effort_not_sent`, read off the run's own `setting_ignored` event) — and exits nonzero
+  on a confounded batch (its protocol is `evals/ab/model-routing.md`, local and Git-ignored);
+  `preflight-verifier.sh` checks the development batch's
   pinned dependencies in a disposable container. Adjacent Python tests exercise offline
   orchestration, file permissions and canonical session transcript capture.
 - `ENHANCEMENTS.md` — agentic-quality implementation ledger and verification scope.
@@ -93,6 +98,8 @@ Documentation:
   plaintext cutoff replay and the bounded continuation limit.
 - `evals/ab/time-budget.md` — frozen time-cap, recovery and uncapped prompt results,
   decisions and diagnostic follow-up; `evals/ab/packs-early-implementation/` stays a proposal.
+- `evals/ab/harbor-local-notes.md` (local, Git-ignored) — Harbor experiment history and
+  the file map for local reports, protocols and unpromoted prompt proposals.
 - `Sources/arnes/ACPCommand.swift` — ACP entry point and optional `--state-directory`;
   Runtime accepts that explicit root for config/credentials/cache/spill isolation, skips
   personal retention, and the command injects record/transcript/dialect stores and pack paths.
@@ -4149,6 +4156,53 @@ Bun installs work). `scripts/npm-release.sh` generates the publishable dirs; aut
       no longer exists (the stash dies with the process — pre-existing); `imagePath` judges
       the paste's shape, so a *typed* untypeable path (not pasted) is only saved by the
       coaching error. (1581 tests.)
+- [x] A dropped dial is no longer silent — `AgentEvent.settingIgnored(setting:reason:)`
+      (`setting_ignored`). `arnes do -m openrouter/auto --effort high` accepted the flag and then
+      never sent it: reasoning is gated on `profile.supportsReasoning`, and an alias is not a
+      manifest model, so `ModelProfile(unknownModelId:)` assumes it doesn't reason. The same hole
+      swallows the chat-dialect case a gateway already hit (`reasoningShape == .none` takes
+      neither spelling). Nothing was wrong on the wire — the run was simply not doing what its
+      flags said, which is how an effort A/B silently becomes a comparison of one effort with
+      itself. The four request gates now read one predicate, `Session.carriesReasoning(profile:
+      dialect:shape:)`, and `Session.reasoningNotice(effort:model:profile:dialect:shape:)` is its
+      user-facing half, so the notice and the wire cannot disagree. `runTurn` yields it after the
+      dialect is *resolved* — not the one the flags asked for — once per session per distinct
+      reason, re-announced when `/model` or `/effort` makes it true differently and cleared when
+      it stops being true; `announcedSettingNotice` holds that state. It rides an event, never
+      the system prompt, so the cache prefix is untouched. Renders everywhere the contract
+      requires: `EventJSON` (`{setting, reason}`), `HeadlessEmitter.textLine`
+      (`⚠ --effort has no effect: …`), `Renderer.render` (yellow) and `renderNested` (dim), the
+      three event-fixture lists, and the `stream-json` event list in the agent skill. The Harbor
+      adapter records it like any event, so `routing_report.py` reads `effort_not_sent` off the
+      evidence instead of inferring it from absent reasoning. No default, flag or wire shape
+      changed — a run that was already delivering its dial is byte-identical, pinned by
+      `HeadlessOutputTests`' golden lines. (1928 tests, +6.)
+- [x] Router evaluation tooling — `openrouter/auto` versus fixed models, prepared but unrun.
+      Every completed Harbor comparison so far pinned one model, so nothing measured what the
+      router alias actually does. Four harness consequences make an alias arm *not* a
+      like-for-like arm, and they are properties of the assumed profile an unknown model gets
+      (`ModelProfile(unknownModelId:)`), not defects: `supportsReasoning = false` means every
+      reasoning path (`Session.swift:2405/2415/2420/2429`) drops the requested `--effort`;
+      family `.other` means the generic pack, not a tuned one; the dialect resolves to chat;
+      `supportsVision = false` withholds `view_image`. Cost is unaffected — `Session.cost(of:model:)`
+      takes the provider's `usage.cost` before estimating (`Session.swift:2667`) — so an alias
+      trial recording `cost_estimated: true` is unusable evidence and is flagged as such.
+      `benchmarks/terminal-bench/routing_report.py` turns a set of labelled Harbor jobs into the
+      comparison: it reads the `routed` events (model **and** upstream provider, emitted on
+      change, so mid-run switches are visible where `routed_models` alone would hide them),
+      reuses `check_verification.inspect_trial` so an unverified trial is reliability evidence
+      rather than a failure, and reports pass rate, cost per solved task, the router's model
+      distribution with per-model pass rates, an exact McNemar p over (task, repetition) pairs,
+      the oracle gap and the excess cost against the cheapest passing arm. It refuses to bless a
+      batch whose held-constant settings drifted (nonzero exit) and flags per-trial conditions
+      that make numbers unsafe to publish — `effort_requested_without_reasoning`, `cost_estimated`,
+      `malformed_events`, missing result/event evidence. The protocol, arms, publication rules
+      and the "auto works / is redundant / routes badly" criteria are `evals/ab/model-routing.md`
+      (local, Git-ignored, like every Harbor protocol);
+      the adapter README now states that an alias arm is not effort-comparable. No default,
+      CLI flag or adapter behavior changed — this is measurement, and the paid batch stays a
+      human-operated step. (15 offline tests; verified against preserved `.build/harbor-smoke`
+      evidence, where it correctly flagged the interface-check pair's differing pack hashes.)
 - [ ] Deferred harness primitives (rationale in DESIGN.md): ~~background *shell* jobs (`run_in_background` → T2)~~ shipped in T2 (background subagents in A4),
       structured note-taking (NOTES.md memory), apply_patch multi-file edits.
 - [x] Auto-read mode + scoped read grants — the P1 read gate kept its floor but lost the
@@ -6211,5 +6265,8 @@ Bun installs work). `scripts/npm-release.sh` generates the publishable dirs; aut
       actual ACP 11/11; the locked static Linux build passes framing 9/9, ACP 11/11 and
       Harbor 7/7, with all 26 dependency checkouts clean and exact. All 2,926 frozen local
       evidence files are byte-identical.
+- [x] Keep new Harbor experiment reports local (2026-09-10) — ignore the local reports,
+      protocols and unpromoted interface-check pack. Preserve their detailed uncommitted
+      history in ignored local notes; existing tracked benchmark evidence remains intact.
 - [ ] OS sandbox: Linux backend (bwrap/landlock); macOS shipped.
 - [ ] Scoreboard-driven routing defaults; gated pack proposals

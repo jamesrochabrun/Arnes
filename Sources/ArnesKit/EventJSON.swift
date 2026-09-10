@@ -56,6 +56,9 @@ extension AgentEvent {
     case .dialectFellBack(let dialect, let reason):
       object["dialect"] = .string(dialect)
       object["reason"] = .string(reason)
+    case .settingIgnored(let setting, let reason):
+      object["setting"] = .string(setting)
+      object["reason"] = .string(reason)
     case .interrupted:
       break
     case .nudged(let reason):

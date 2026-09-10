@@ -171,6 +171,12 @@ the contract agents rely on. Users symlink it to `~/.claude/skills/arnes` for gl
 
 ## Working on it
 
+- Every proposed harness fix or behavior experiment includes an exact Harbor retest command,
+  a pinned baseline and candidate, the settings held constant, and the metrics that would
+  support the change. Report Terminal-Bench verifier task passes first, then failure causes,
+  duration and recorded cost. Prepare and validate the retest before handing it to the human;
+  paid trials remain human-operated. Local protocols and reports are Git-ignored; when
+  available, see `evals/ab/harbor-retest.md`.
 - `swift test` — unit tests, no network (~3 min build, then ~60 s). Agent/Session tests inject
   `MockOpenRouterService` (`Tests/ArnesKitTests/Mocks/`) with scripted chunk streams. Read
   results with `set -o pipefail; swift test 2>&1 | grep -E "error:|failed|Executed [0-9]+ tests" | tail -3`.

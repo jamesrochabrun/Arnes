@@ -72,6 +72,10 @@ final class HeadlessOutputTests: XCTestCase {
       .routed(model: "served/model", provider: "Anthropic"),
       .routed(model: "served/model", provider: nil),
       .dialectFellBack(dialect: "messages", reason: "404"),
+      .settingIgnored(
+        setting: "effort",
+        reason: "the manifest doesn't advertise reasoning for openrouter/auto, so effort high "
+          + "is not sent (an alias or unlisted model is assumed not to reason)"),
       .compacted(summarizedMessages: 4, keptMessages: 2),
       .toolResultsCleared(count: 3, freedChars: 12000),
       .toolResultsCleared(count: 1, freedChars: 2500),
@@ -129,6 +133,8 @@ final class HeadlessOutputTests: XCTestCase {
       "⇄ routed to served/model (Anthropic)",
       "⇄ routed to served/model",
       "⤵ messages dialect failed (404) — fell back to chat",
+      "⚠ --effort has no effect: the manifest doesn't advertise reasoning for openrouter/auto, "
+        + "so effort high is not sent (an alias or unlisted model is assumed not to reason)",
       "◈ compacted 4 older messages",
       "◈ cleared 3 older tool results from the request (12000 chars)",
       "◈ cleared 1 older tool result from the request (2500 chars)",

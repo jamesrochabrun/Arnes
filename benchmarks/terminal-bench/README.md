@@ -65,6 +65,15 @@ or provenance. Review Harbor/provider logs before sharing them as well. Provider
 upstream routing can still change: compare the recorded routed models, not only the
 requested slug.
 
+`ARNES_MODEL` accepts a router alias such as `openrouter/auto` (Harbor's `--model` must
+still match it), but an alias is not in the manifest, so the run gets the assumed profile:
+no reasoning parameter whatever `ARNES_EFFORT` says, the generic prompt pack, the chat
+dialect and no `view_image`. An alias arm is therefore not comparable to a fixed-model arm
+at the same effort — the run announces the dropped dial as a `setting_ignored` event in
+`arnes-events.jsonl`, and `routing_report.py` flags any trial carrying it. The arms, metrics
+and publication rules for such a run are in `evals/ab/model-routing.md` (local, Git-ignored,
+like every Harbor protocol here); read it before running or publishing one.
+
 For the guidance arm, set `ARNES_PACKS_DIR=evals/ab/packs-tool-guidance` on the host.
 The adapter copies Markdown and tool-guidance JSON files into the container and records
 their combined content hash. Files must be regular UTF-8 files, at most 64 KB each,
@@ -154,6 +163,20 @@ it does not run or modify task tests, and cannot guarantee a later network reque
    elapsed time and tool calls. Include all trials; do not discard failed installations.
 5. Inspect regressions and use paired task outcomes before promoting a prompt default.
    A small or noisy improvement is inconclusive, not a new default.
+
+To compare arms that differ by model — including a `openrouter/auto` arm against fixed
+models — give each arm's job directory a label:
+
+```bash
+python3 benchmarks/terminal-bench/routing_report.py \
+  --arm auto=/path/to/auto-job --arm strong=/path/to/strong-job --reference auto
+```
+
+It pairs arms on (task, repetition), reports pass rate, **cost per solved task**, the models
+the router actually chose with their upstream providers, an exact McNemar p-value and the
+oracle gap, and flags trials whose numbers are unsafe to publish — an estimated cost, a
+requested effort that produced no reasoning, malformed events, missing evidence. It exits
+nonzero when a held-constant setting differs across arms or no arm solved anything.
 
 Run offline contract checks without Harbor, containers or model calls:
 

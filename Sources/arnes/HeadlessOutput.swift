@@ -216,6 +216,8 @@ final class HeadlessEmitter: @unchecked Sendable {
       line = "⇄ routed to \(model)\(provider.map { " (\($0))" } ?? "")"
     case .dialectFellBack(let dialect, let reason):
       line = "⤵ \(dialect) dialect failed (\(reason.prefix(80))) — fell back to chat"
+    case .settingIgnored(let setting, let reason):
+      line = "⚠ --\(setting) has no effect: \(reason)"
     case .compacted(let summarized, _):
       line = "◈ compacted \(summarized) older messages"
     // Microcompaction (C2): older tool results stubbed in the request view — the persisted history

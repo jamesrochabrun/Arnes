@@ -470,7 +470,13 @@ model posted or refreshed its `update_plan` checklist — the complete plan, `st
 `pending`/`in_progress`/`completed`; fired between the `tool_call` and its `tool_result`; text
 mode prints `☰ plan 2/5 · [~] <current step>` for the lead's plan — a subagent's arrives nested
 in its `subagent` events and, like its tool results, prints no text line), `assistant
-{text}`, `routed`, `hook_blocked`, `subagent_started`/`subagent {name, id, event}`/
+{text}`, `routed`, `setting_ignored {setting, reason}` (a dial the run asked for cannot reach this
+model, so the request never carries it — today only `effort`, dropped when the manifest doesn't
+advertise reasoning for the model, which includes every alias such as `openrouter/auto`, or when
+the provider takes no reasoning field on the chat dialect; said once per session per distinct
+reason, and again after a `/model` or `/effort` change makes it true differently. **An arm
+carrying this is not running at the effort its flags asked for** — check for it before comparing
+runs by effort), `hook_blocked`, `subagent_started`/`subagent {name, id, event}`/
 `subagent_finished`, `subagent_backgrounded {name, id, model}` (a `task` call with
 `background: true` returned at once; its `subagent_finished` arrives later, when the report is
 delivered), `subagent_joining {pending}` (the model finished while background subagents were
