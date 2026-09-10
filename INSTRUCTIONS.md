@@ -4178,6 +4178,20 @@ Bun installs work). `scripts/npm-release.sh` generates the publishable dirs; aut
       evidence instead of inferring it from absent reasoning. No default, flag or wire shape
       changed — a run that was already delivering its dial is byte-identical, pinned by
       `HeadlessOutputTests`' golden lines. (1928 tests, +6.)
+- [x] Plan the context window against what *answered*, not what was asked for —
+      `Session.effectiveContextLength`. A router alias states its own window (`openrouter/auto`
+      advertises 2,000,000) while the model it picks may have a fraction of it: the pilot's alias
+      routed every task to a model whose real window is far smaller. Compaction reads
+      `profile.contextLength`, so an alias run would sail past the served model's limit without
+      ever auto-compacting and take a hard provider context error instead — the failure mode
+      compaction exists to prevent. `observeRoutedContext` resolves each newly routed model once
+      (the catalog serves it from memory) and keeps the *narrowest* window seen;
+      `effectiveContextLength` is `min(requested, routed)` and feeds the turn-start check, the
+      mid-turn relief check and `TurnStats.contextLength`. It only ever narrows: a roomier routed
+      model does not license overfilling the window the request was shaped for. Nothing here
+      touches the pack, dialect or tools — those key off the requested slug and must stay
+      byte-stable across a session's requests, so the prompt-cache prefix is unaffected. Pinned
+      both ways, and the narrowing test fails without the fix. (1931 tests, +2.)
 - [x] A price the manifest states as negative is not a price — `ModelProfile.price`. The
       router alias prices its tokens `-1` ("varies with whatever it picks"), and `Double.init`
       took that literally: `Session.estimatedCost` multiplied tokens by a negative rate, so a

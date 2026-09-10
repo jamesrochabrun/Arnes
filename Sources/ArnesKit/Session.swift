@@ -252,6 +252,9 @@ public actor Session {
   /// The live effort dial (`/effort`), seeded from the configuration in both inits — the
   /// configuration itself is immutable, so the dials that move mid-session live here.
   private var reasoningEffortOverride: Reasoning.Effort?
+  /// The narrowest context window any routed model actually has, when a router served one.
+  /// nil until a response names a model whose manifest states a window.
+  private var narrowestRoutedContextLength: Int?
   /// The last `.settingIgnored` reason announced, so the notice is said once rather than every
   /// turn — and said again when a `/model` or `/effort` change makes it true for a new reason.
   /// nil means nothing is currently being dropped.
@@ -980,7 +983,7 @@ public actor Session {
     // measures again. The whole previous turn stays verbatim; older history becomes a note. The
     // summarizer is told the request about to run is the one its notes serve (`text` is not in
     // the history yet). A manifest that says the window is 0 wide asks for nothing.
-    if let contextLength = profile.contextLength, contextLength > 0,
+    if let contextLength = effectiveContextLength(profile), contextLength > 0,
        let used = lastPromptTokens,
        Double(used) >= Double(contextLength) * compactionThreshold
     {
@@ -1070,7 +1073,7 @@ public actor Session {
         continuation.yield(.turnFinished(TurnStats(
           steps: 0, toolCalls: 0, turnCostUSD: hookSpend, sessionCostUSD: costUSD,
           requestedModel: record.model, routedModels: [], promptTokens: lastPromptTokens,
-          contextLength: profile.contextLength,
+          contextLength: effectiveContextLength(profile),
           durationSeconds: Date().timeIntervalSince(record.startedAt))))
         continuation.finish()
         return
@@ -1235,6 +1238,9 @@ public actor Session {
       for served in step.routed where !record.routedModels.contains(served) {
         record.routedModels.append(served)
       }
+      // What actually answered decides the window this turn plans against, before the
+      // mid-turn compaction check below reads it.
+      await observeRoutedContext(step.routed)
       if let cost = step.cost ?? estimatedCost(of: step, profile: profile) {
         record.costUSD += cost
         turnCost += cost
@@ -1279,7 +1285,7 @@ public actor Session {
         record.toolResultsCleared = (record.toolResultsCleared ?? 0) + clearedToolResults
         clearedToolResults = 0
       }
-      if !step.toolCalls.isEmpty, let contextLength = profile.contextLength, contextLength > 0,
+      if !step.toolCalls.isEmpty, let contextLength = effectiveContextLength(profile), contextLength > 0,
          let used = step.promptTokens,
          Double(used) >= Double(contextLength) * compactionThreshold
       {
@@ -1980,7 +1986,7 @@ public actor Session {
       requestedModel: record.model,
       routedModels: record.routedModels,
       promptTokens: lastPromptTokens,
-      contextLength: profile.contextLength,
+      contextLength: effectiveContextLength(profile),
       durationSeconds: Date().timeIntervalSince(record.startedAt),
       cachedPromptTokens: record.cachedTokens,
       totalPromptTokens: record.promptTokens)))
@@ -2755,6 +2761,35 @@ public actor Session {
     return Double(promptTokens ?? 0) * promptPrice + Double(completionTokens ?? 0) * completionPrice
   }
 
+  /// The window to plan compaction against: the requested model's, narrowed to the routed
+  /// model's whenever a router served something smaller.
+  ///
+  /// A router alias states its own window — `openrouter/auto` advertises 2,000,000 — while the
+  /// model that answers may have a fraction of it. Planning against the alias's figure means
+  /// auto-compaction never fires and the routed model hard-errors on context instead. Only ever
+  /// *narrows*: a routed model with a bigger window doesn't license overfilling the one the
+  /// request was shaped for, and nothing here touches the pack, dialect or tools, which key off
+  /// the requested slug and must stay byte-stable across a session's requests.
+  private func effectiveContextLength(_ profile: ModelProfile) -> Int? {
+    switch (profile.contextLength, narrowestRoutedContextLength) {
+    case (let requested?, let routed?): return min(requested, routed)
+    case (let requested?, nil): return requested
+    case (nil, let routed?): return routed
+    case (nil, nil): return nil
+    }
+  }
+
+  /// Learn the real window behind a routed model. Cheap after the first call: the catalog
+  /// serves the manifest from memory, and an unknown model simply teaches us nothing.
+  private func observeRoutedContext(_ served: [String]) async {
+    for model in served where model != self.model {
+      guard let profile = try? await catalog.profile(for: model),
+            let length = profile.contextLength, length > 0
+      else { continue }
+      narrowestRoutedContextLength = min(narrowestRoutedContextLength ?? length, length)
+    }
+  }
+
   /// Records a served model on the step and surfaces it once per turn.
   private func noteRouted(
     _ served: String?,
@@ -3217,7 +3252,7 @@ public actor Session {
       history: requestHistory(),
       tools: requestTools(for: profile, pack: pack)?.map(\.toolDefinition) ?? [],
       lastPromptTokens: lastPromptTokens,
-      contextLength: profile.contextLength,
+      contextLength: effectiveContextLength(profile),
       compactionThreshold: compactionThreshold)
   }
 

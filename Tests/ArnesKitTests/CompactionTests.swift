@@ -109,6 +109,68 @@ final class CompactionTests: XCTestCase {
     XCTAssertEqual(finalRequest.messages.count, 4)
   }
 
+  /// A router alias states its own window — `openrouter/auto` advertises 2,000,000 — while the
+  /// model that answers may have a fraction of it. Planning against the alias's figure means
+  /// auto-compaction never fires and the routed model hard-errors on context instead.
+  func testRoutedModelNarrowsTheWindowAnAliasClaims() async throws {
+    let mock = MockOpenRouterService()
+    mock.manifestJSON = Fixtures.manifest(
+      Fixtures.manifestModel(id: "router/alias", contextLength: 2_000_000),
+      Fixtures.manifestModel(id: "served/small", contextLength: 100))
+    // Every response says a small model actually served it, exactly as a router's does.
+    mock.chunkScripts = [
+      [Fixtures.textChunk("a1", model: "served/small"),
+       Fixtures.usageChunk(cost: 0.01, promptTokens: 20)],
+      [Fixtures.textChunk("a2", model: "served/small"),
+       Fixtures.usageChunk(cost: 0.01, promptTokens: 90)], // 90% of the *served* window
+      [Fixtures.textChunk("a3", model: "served/small"),
+       Fixtures.usageChunk(cost: 0.01, promptTokens: 30)],
+    ]
+    mock.chatResponses = [Fixtures.textResponse("AUTO SUMMARY", cost: 0.001)]
+    let session = Session(
+      service: mock, tools: [], store: tempRecordStore(),
+      configuration: .init(model: "router/alias"))
+
+    for try await _ in await session.send("turn one") { }
+    for try await _ in await session.send("turn two") { }
+    var compacted = false
+    for try await event in await session.send("turn three") {
+      if case .compacted = event { compacted = true }
+    }
+    // 90 tokens is 0.0045% of the alias's claimed 2M and 90% of what actually answered.
+    XCTAssertTrue(compacted, "planned against the alias's window instead of the served model's")
+    XCTAssertTrue(mock.requests.last!.messages[0].content?.plainText.contains("AUTO SUMMARY") == true)
+  }
+
+  /// The narrowing never runs the other way: a roomier routed model does not license
+  /// overfilling the window the request was actually shaped for.
+  func testARoomierRoutedModelDoesNotWidenTheWindow() async throws {
+    let mock = MockOpenRouterService()
+    mock.manifestJSON = Fixtures.manifest(
+      Fixtures.manifestModel(id: "test/model", contextLength: 100),
+      Fixtures.manifestModel(id: "served/huge", contextLength: 2_000_000))
+    mock.chunkScripts = [
+      [Fixtures.textChunk("a1", model: "served/huge"),
+       Fixtures.usageChunk(cost: 0.01, promptTokens: 20)],
+      [Fixtures.textChunk("a2", model: "served/huge"),
+       Fixtures.usageChunk(cost: 0.01, promptTokens: 90)],
+      [Fixtures.textChunk("a3", model: "served/huge"),
+       Fixtures.usageChunk(cost: 0.01, promptTokens: 30)],
+    ]
+    mock.chatResponses = [Fixtures.textResponse("AUTO SUMMARY", cost: 0.001)]
+    let session = Session(
+      service: mock, tools: [], store: tempRecordStore(),
+      configuration: .init(model: "test/model"))
+
+    for try await _ in await session.send("turn one") { }
+    for try await _ in await session.send("turn two") { }
+    var compacted = false
+    for try await event in await session.send("turn three") {
+      if case .compacted = event { compacted = true }
+    }
+    XCTAssertTrue(compacted, "the requested model's 100-token window still governs")
+  }
+
   func testCompactionSurvivesResume() async throws {
     let mock = MockOpenRouterService()
     mock.manifestJSON = Fixtures.manifest(Fixtures.manifestModel(id: "test/model"))
