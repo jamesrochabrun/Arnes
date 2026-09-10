@@ -33,6 +33,31 @@ class BenchmarkContractTests(unittest.TestCase):
       with self.subTest(key=key, value=value), self.assertRaises(ValueError):
         BenchmarkConfig.from_environment(dict(self.environment(), **{key: value}))
 
+  def test_router_alias_needs_an_explicit_opt_in(self):
+    """The default stays reproducible; the router experiment says so out loud."""
+    alias = dict(self.environment(), ARNES_MODEL="openrouter/auto")
+    with self.assertRaises(ValueError):
+      BenchmarkConfig.from_environment(alias)
+    with self.assertRaises(ValueError):
+      BenchmarkConfig.from_environment(dict(alias, ARNES_ROUTER_ALIAS="false"))
+    with self.assertRaises(ValueError):
+      BenchmarkConfig.from_environment(dict(alias, ARNES_ROUTER_ALIAS="yes"))
+    config = BenchmarkConfig.from_environment(dict(alias, ARNES_ROUTER_ALIAS="true"))
+    self.assertEqual(config.model, "openrouter/auto")
+    self.assertTrue(config.router_alias)
+    # The evidence must say the run deliberately let a router choose.
+    self.assertIs(config.provenance()["router_alias"], True)
+    self.assertEqual(config.provenance()["schema_version"], 5)
+
+  def test_opting_in_does_not_change_an_explicit_model_run(self):
+    plain = BenchmarkConfig.from_environment(self.environment())
+    self.assertFalse(plain.router_alias)
+    self.assertIs(plain.provenance()["router_alias"], False)
+    opted = BenchmarkConfig.from_environment(
+      dict(self.environment(), ARNES_ROUTER_ALIAS="true"))
+    self.assertEqual(opted.command("t", "S"), plain.command("t", "S"),
+                     "the flag gates a refusal, it never reshapes the command")
+
   def test_provenance_omits_download_url(self):
     config = BenchmarkConfig.from_environment(dict(self.environment(),
       ARNES_LINUX_BINARY_URL="https://example.com/binary?token=private"))
@@ -74,7 +99,7 @@ class BenchmarkContractTests(unittest.TestCase):
     self.assertEqual(args[args.index("--max-response-tokens") + 1], "8192")
     self.assertTrue(arm.provenance()["time_aware"])
     self.assertEqual(arm.provenance()["max_response_tokens"], 8192)
-    self.assertEqual(arm.provenance()["schema_version"], 4)
+    self.assertEqual(arm.provenance()["schema_version"], 5)
 
   def test_instruction_is_one_literal_argument(self):
     instruction = "fix 'it'; $(touch /tmp/not-executed)\n--help"

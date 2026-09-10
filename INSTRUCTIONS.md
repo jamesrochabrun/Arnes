@@ -67,8 +67,9 @@ Documentation:
   `benchmarks/terminal-bench/README.md` — the external adapter and reproducibility notes;
   `arnes_agent.py` integrates Harbor, installs Debian/Ubuntu runtime prerequisites,
   preserves task umask and hands off completed results during a bounded service grace period;
-  `benchmark_contract.py` bounds host pack inputs, records opt-in time notices and response
-  token limits in schema-4 provenance, and parses results; `check_verification.py` audits pytest/CTRF outcomes separately
+  `benchmark_contract.py` bounds host pack inputs, records opt-in time notices, response
+  token limits and the `ARNES_ROUTER_ALIAS` opt-in (which alone lets `openrouter/auto` past the
+  explicit-model guard) in schema-5 provenance, and parses results; `check_verification.py` audits pytest/CTRF outcomes separately
   from missing verifier reports; `routing_report.py` compares labelled arms across Harbor jobs —
   the `routed` event timeline (model + upstream provider), pass rate, cost per solved task,
   (task, repetition) pairing with an exact McNemar p, the oracle gap and per-trial publishability
@@ -4177,6 +4178,17 @@ Bun installs work). `scripts/npm-release.sh` generates the publishable dirs; aut
       evidence instead of inferring it from absent reasoning. No default, flag or wire shape
       changed — a run that was already delivering its dial is byte-identical, pinned by
       `HeadlessOutputTests`' golden lines. (1928 tests, +6.)
+- [x] The Harbor adapter can run the router it was built to refuse — `ARNES_ROUTER_ALIAS`.
+      `benchmark_contract` rejected `openrouter/auto` outright, and rightly: the model would be
+      chosen per request, so the requested slug says nothing about what answered and no two runs
+      are guaranteed comparable. That is exactly wrong for a reproducible arm and exactly the
+      point of a router experiment, so the guard stays and the experiment opts out of it
+      explicitly. `ARNES_ROUTER_ALIAS=true` is the only way past, it is recorded in provenance
+      (schema 5) so the evidence says a router chose, and it gates a *refusal* only — the
+      command an explicit-model run builds is byte-identical either way, pinned by a test. Found
+      by running the preflight rather than reading the code: an earlier read of the validation
+      missed the check, and the container's own `RuntimeError` was the correction. (47 offline
+      tests, +2.)
 - [x] Router evaluation tooling — `openrouter/auto` versus fixed models, prepared but unrun.
       Every completed Harbor comparison so far pinned one model, so nothing measured what the
       router alias actually does. Four harness consequences make an alias arm *not* a

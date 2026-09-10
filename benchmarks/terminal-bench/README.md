@@ -65,8 +65,12 @@ or provenance. Review Harbor/provider logs before sharing them as well. Provider
 upstream routing can still change: compare the recorded routed models, not only the
 requested slug.
 
-`ARNES_MODEL` accepts a router alias such as `openrouter/auto` (Harbor's `--model` must
-still match it), but an alias is not in the manifest, so the run gets the assumed profile:
+`ARNES_MODEL` normally refuses a router alias such as `openrouter/auto`: the model would be
+chosen per request, so the requested slug would say nothing about what answered and no two
+runs would be guaranteed comparable. Set `ARNES_ROUTER_ALIAS=true` when the router *is* the
+experiment; the opt-in is recorded in provenance so the evidence says a router chose. Harbor's
+`--model` must still match `ARNES_MODEL`. An alias is not in the manifest, so such a run gets
+the assumed profile:
 no reasoning parameter whatever `ARNES_EFFORT` says, the generic prompt pack, the chat
 dialect and no `view_image`. An alias arm is therefore not comparable to a fixed-model arm
 at the same effort — the run announces the dropped dial as a `setting_ignored` event in
@@ -93,7 +97,7 @@ Optional, independently controlled experiments (all off/unset in the control):
 
 Boolean controls accept only `true` or `false`; the recent-tool token budget is nonnegative
 and the response-token ceiling is positive. The adapter writes settings into its isolated
-config or CLI arguments and provenance (schema version 4). Installation checks that the
+config or CLI arguments and provenance (schema version 5, which added `router_alias`). Installation checks that the
 binary supports each enabled CLI experiment. For the independent early-implementation
 prompt proposal, use `ARNES_PACKS_DIR=evals/ab/packs-early-implementation`.
 See [the controlled time-budget protocol](../../evals/ab/time-budget.md).

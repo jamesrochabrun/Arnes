@@ -27,6 +27,11 @@ class BenchmarkConfig:
   keep_recent_tool_tokens: int | None = None
   time_aware: bool = False
   max_response_tokens: int | None = None
+  # A router alias (`openrouter/auto`) picks the model per request, so the requested slug says
+  # nothing about what answered and no two runs are guaranteed comparable. That is the opposite
+  # of what this adapter is for, so it stays refused unless a run is *about* the router — the
+  # experiment in evals/ab/model-routing.md. Opting in is recorded in provenance.
+  router_alias: bool = False
 
   @classmethod
   def from_environment(cls, environment):
@@ -55,14 +60,16 @@ class BenchmarkConfig:
         if "ARNES_KEEP_RECENT_TOOL_TOKENS" in environment else None,
       time_aware=boolean("ARNES_TIME_AWARE"),
       max_response_tokens=int(environment["ARNES_MAX_RESPONSE_TOKENS"])
-        if "ARNES_MAX_RESPONSE_TOKENS" in environment else None)
+        if "ARNES_MAX_RESPONSE_TOKENS" in environment else None,
+      router_alias=boolean("ARNES_ROUTER_ALIAS"))
     url = urlsplit(config.binary_url)
     if url.scheme != "https" or not url.hostname or url.username or url.password:
       raise ValueError("Binary URL must be HTTPS without credentials")
     if not re.fullmatch(r"[0-9a-f]{64}", config.binary_sha256):
       raise ValueError("Invalid ARNES_LINUX_BINARY_SHA256")
-    if config.model == "openrouter/auto":
-      raise ValueError("Choose an explicit model, not openrouter/auto")
+    if config.model == "openrouter/auto" and not config.router_alias:
+      raise ValueError("Choose an explicit model, not openrouter/auto — or set "
+                       "ARNES_ROUTER_ALIAS=true when the router itself is the experiment")
     if config.effort not in {"minimal", "low", "medium", "high", "xhigh", "max", "none"}:
       raise ValueError("Invalid ARNES_EFFORT")
     if config.dialect not in {"auto", "chat", "messages", "responses"}:
@@ -80,7 +87,7 @@ class BenchmarkConfig:
   def provenance(self):
     values = asdict(self)
     del values["binary_url"]  # A signed URL is private; the digest identifies its contents.
-    return dict(values, provider="openrouter", bare=True, memory=False, schema_version=4)
+    return dict(values, provider="openrouter", bare=True, memory=False, schema_version=5)
 
   def runtime_config(self):
     config = {
