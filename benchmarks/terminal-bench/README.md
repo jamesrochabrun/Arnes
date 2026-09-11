@@ -192,6 +192,21 @@ oracle gap, and flags trials whose numbers are unsafe to publish — an estimate
 requested effort that produced no reasoning, malformed events, missing evidence. It exits
 nonzero when a held-constant setting differs across arms or no arm solved anything.
 
+After a suite run, triage the failures before deciding what to change:
+
+```bash
+python3 benchmarks/terminal-bench/failure_triage.py /path/to/harbor/job \
+  --dataset .build/harbor-smoke/datasets/terminal-bench
+```
+
+It buckets every failure by what the trajectory supports and ranks the buckets by how many
+tasks sit in each, so the next change is chosen by counts. It attributes a failure to the
+harness only where the evidence decides on its own — a deadline hit, our own budget ceiling, or
+build output left beside the deliverable in a task whose tests assert an exact directory
+listing. Everything else lands in one `completed_but_wrong` pool with its numbers exposed,
+because the two attempts at inferring "did it verify its work" both produced wrong answers on
+real data. A bucket is where to look, not what to fix.
+
 Run offline contract checks without Harbor, containers or model calls:
 
 ```bash

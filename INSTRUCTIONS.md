@@ -4178,6 +4178,23 @@ Bun installs work). `scripts/npm-release.sh` generates the publishable dirs; aut
       evidence instead of inferring it from absent reasoning. No default, flag or wire shape
       changed — a run that was already delivering its dial is byte-identical, pinned by
       `HeadlessOutputTests`' golden lines. (1928 tests, +6.)
+- [x] Triage a suite's failures by what the trajectory supports —
+      `benchmarks/terminal-bench/failure_triage.py`. The first full-suite run (47/89) left 42
+      failures and no way to choose among them except by reading; hand-reading three found one
+      harness bug, one unavoidable environment limit and one model error, which is too slow for
+      42 and too easy to bias. The tool buckets every failure and ranks buckets by task count,
+      and it attributes to the harness **only** where evidence decides alone: a deadline hit, our
+      own budget ceiling, or build output left beside the deliverable in a task whose own tests
+      assert an exact directory listing (`--dataset` supplies that last check — it is what
+      separates the two causal polyglot failures from a third that merely left a stray binary).
+      Two inference attempts were cut after real data falsified them: counting only the file
+      tools missed every deliverable written by a shell redirect (8 tasks wrongly "wrote
+      nothing"), and then counting redirects as writes made `python test.py > out.txt` read as a
+      write rather than the check it is (15 tasks wrongly "never verified"). Both are recorded in
+      the source as the reason that bucket does not exist; what cannot survive its own evidence
+      does not get to assign blame, so those trials stay in one `completed_but_wrong` pool with
+      their numbers exposed. On the 2026-09-11 job it reproduces, unaided, the two polyglot
+      failures found by hand. (60 offline tests, +7.)
 - [x] Pin the upstream provider — `ProviderRouting` (`providers.<name>.providerRouting`) and
       `ARNES_PROVIDER_ONLY` in the Harbor adapter. A model id names a *model*, not a machine:
       OpenRouter picks an upstream provider per request, and the same slug served by different
