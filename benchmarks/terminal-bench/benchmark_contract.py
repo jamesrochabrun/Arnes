@@ -32,6 +32,12 @@ class BenchmarkConfig:
   # of what this adapter is for, so it stays refused unless a run is *about* the router — the
   # experiment in evals/ab/model-routing.md. Opting in is recorded in provenance.
   router_alias: bool = False
+  # Upstream providers allowed to serve the model, strictly (`provider.only`, fallbacks off).
+  # A model id names a model, not a machine: OpenRouter picks a provider per request, and the
+  # same slug served by different providers differs in latency, price and output quality — one
+  # of them, on 2026-09-10, returned content unrelated to the task. For a comparison that is
+  # an uncontrolled variable larger than most of what is being measured.
+  provider_only: tuple = ()
 
   @classmethod
   def from_environment(cls, environment):
@@ -61,7 +67,10 @@ class BenchmarkConfig:
       time_aware=boolean("ARNES_TIME_AWARE"),
       max_response_tokens=int(environment["ARNES_MAX_RESPONSE_TOKENS"])
         if "ARNES_MAX_RESPONSE_TOKENS" in environment else None,
-      router_alias=boolean("ARNES_ROUTER_ALIAS"))
+      router_alias=boolean("ARNES_ROUTER_ALIAS"),
+      provider_only=tuple(
+        name.strip() for name in environment.get("ARNES_PROVIDER_ONLY", "").split(",")
+        if name.strip()))
     url = urlsplit(config.binary_url)
     if url.scheme != "https" or not url.hostname or url.username or url.password:
       raise ValueError("Binary URL must be HTTPS without credentials")
@@ -82,11 +91,15 @@ class BenchmarkConfig:
       raise ValueError("ARNES_KEEP_ALIVE_SECONDS must be between 0 and 3600")
     if config.max_response_tokens is not None and config.max_response_tokens < 1:
       raise ValueError("ARNES_MAX_RESPONSE_TOKENS must be positive")
+    if any("," in name or not name for name in config.provider_only):
+      raise ValueError("ARNES_PROVIDER_ONLY is a comma-separated list of provider names")
     return config
 
   def provenance(self):
     values = asdict(self)
     del values["binary_url"]  # A signed URL is private; the digest identifies its contents.
+    # Provenance is a JSON document: emit a plain list, not a tuple's repr.
+    values["provider_only"] = list(self.provider_only)
     return dict(values, provider="openrouter", bare=True, memory=False, schema_version=5)
 
   def runtime_config(self):
@@ -96,6 +109,13 @@ class BenchmarkConfig:
         "commandDiagnostics": self.command_diagnostics},
       "compaction": {"preserveCommandEvidence": self.preserve_command_evidence},
     }
+    if self.provider_only:
+      # Strict by default in the Kit: a pin that silently falls back is worse than no pin,
+      # because the run still looks pinned in its own provenance.
+      config["providers"] = {"openrouter": {
+        "kind": "openrouter",
+        "baseURL": "https://openrouter.ai/api/v1",
+        "providerRouting": {"only": list(self.provider_only)}}}
     if self.keep_recent_tool_tokens is not None:
       config["compaction"]["keepRecentToolTokens"] = self.keep_recent_tool_tokens
     return config

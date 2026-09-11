@@ -58,6 +58,28 @@ class BenchmarkContractTests(unittest.TestCase):
     self.assertEqual(opted.command("t", "S"), plain.command("t", "S"),
                      "the flag gates a refusal, it never reshapes the command")
 
+  def test_provider_pin_is_strict_and_recorded(self):
+    """Same model, different upstream provider, different results — so a comparison pins it."""
+    config = BenchmarkConfig.from_environment(
+      dict(self.environment(), ARNES_PROVIDER_ONLY="Together, Fireworks"))
+    self.assertEqual(config.provider_only, ("Together", "Fireworks"))
+    entry = config.runtime_config()["providers"]["openrouter"]
+    self.assertEqual(entry["providerRouting"], {"only": ["Together", "Fireworks"]})
+    # The entry has to decode as a whole ProviderConfig, not just the new key.
+    self.assertEqual(entry["kind"], "openrouter")
+    self.assertIn("baseURL", entry)
+    self.assertEqual(config.provenance()["provider_only"], ["Together", "Fireworks"])
+
+  def test_no_pin_leaves_the_config_untouched(self):
+    config = BenchmarkConfig.from_environment(self.environment())
+    self.assertEqual(config.provider_only, ())
+    self.assertNotIn("providers", config.runtime_config())
+
+  def test_provider_ignores_blank_entries(self):
+    config = BenchmarkConfig.from_environment(
+      dict(self.environment(), ARNES_PROVIDER_ONLY=" Together , , "))
+    self.assertEqual(config.provider_only, ("Together",))
+
   def test_provenance_omits_download_url(self):
     config = BenchmarkConfig.from_environment(dict(self.environment(),
       ARNES_LINUX_BINARY_URL="https://example.com/binary?token=private"))

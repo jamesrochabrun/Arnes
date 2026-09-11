@@ -742,7 +742,8 @@ public actor Session {
             dropped, existingSummary: compactionSummary,
             currentRequest: currentRequest ?? kept.first { $0.role == .user }?.content?.plainText,
             includeCommandEvidence: configuration.compaction.preserveCommandEvidence)),
-        ]))
+        ],
+        provider: providerPreferences))
     guard let summary = response.choices.first?.message.content, !summary.isEmpty else {
       throw SessionError.compactionFailed
     }
@@ -2258,6 +2259,7 @@ public actor Session {
             system: systemText(pack: pack, profile: profile),
             history: replay,
             breakpoint: cacheBreakpoint(profile: profile)),
+          provider: providerPreferences,
           reasoning: chatReasoning(profile: profile),
           reasoningEffort: chatReasoningEffort(profile: profile),
           tools: requestTools(for: profile, pack: pack)?.map(\.toolDefinition),
@@ -2418,6 +2420,13 @@ public actor Session {
   private func cacheBreakpoint(profile: ModelProfile) -> CacheControl? {
     cacheBreakpointsEnabled(profile: profile) ? configuration.cachePolicy.cacheControl : nil
   }
+
+  /// The upstream-provider pin for every request this session sends, or nil when nothing is
+  /// pinned — so an unpinned body is byte-identical to before pinning existed. A model id names
+  /// a model, not a machine: OpenRouter chooses an upstream provider per request, and the same
+  /// slug served by different providers differs in latency, price and output quality. A
+  /// comparison that does not pin this is measuring the provider lottery along with itself.
+  private var providerPreferences: ProviderPreferences? { traits.providerRouting?.preferences }
 
   // MARK: Reasoning effort
 
@@ -2589,6 +2598,7 @@ public actor Session {
           thinking: shape.thinking,
           tools: requestTools(for: profile, pack: pack).map { MessagesTranslator.tools($0, breakpointOnLast: breakpoint) },
           models: fallbackModelsField,
+          provider: providerPreferences,
           extraBody: fallbackExtraBody)))
     } catch is CancellationError {
       outcome.interrupted = true
@@ -2657,6 +2667,7 @@ public actor Session {
           include: reasoning == nil ? nil : [ResponsesTranslator.encryptedReasoningInclude],
           reasoning: reasoning,
           tools: requestTools(for: profile, pack: pack)?.map(ResponsesTranslator.tool),
+          provider: providerPreferences,
           extraBody: fallbackExtraBody)))
     } catch is CancellationError {
       outcome.interrupted = true
@@ -3276,6 +3287,7 @@ public actor Session {
       ChatCompletionRequest(
         model: model,
         messages: messages,
+        provider: providerPreferences,
         tools: sideTools,
         // `ToolChoice.none` spelled out: a bare `.none` here is `Optional.none`, i.e. no field.
         toolChoice: sideTools == nil ? nil : ToolChoice.none))

@@ -85,6 +85,15 @@ their combined content hash. Files must be regular UTF-8 files, at most 64 KB ea
 64 files and 1 MB combined; symbolic-link leaves and special files are refused.
 Leave it unset for built-in guidance.
 
+**Pin the upstream provider for any comparison.** `ARNES_PROVIDER_ONLY=Together,Fireworks`
+restricts which upstream providers may serve the model, strictly — fallbacks off, so a pin
+cannot silently unpin itself. A model id names a model, not a machine: OpenRouter chooses a
+provider per request, and the same slug served by different providers differs in latency,
+price and output quality. On 2026-09-10 one provider returned content wholly unrelated to the
+task, which scored as an ordinary task failure. Unpinned, that variance is larger than most
+of what a harness comparison is trying to measure, and it is invisible in the result. The
+chosen providers are recorded in provenance; leave it unset for the router's own behavior.
+
 Optional, independently controlled experiments (all off/unset in the control):
 
 - `ARNES_COMMAND_DIAGNOSTICS=true`: append bounded findings from foreground bash output.

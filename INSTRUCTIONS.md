@@ -4178,6 +4178,25 @@ Bun installs work). `scripts/npm-release.sh` generates the publishable dirs; aut
       evidence instead of inferring it from absent reasoning. No default, flag or wire shape
       changed — a run that was already delivering its dial is byte-identical, pinned by
       `HeadlessOutputTests`' golden lines. (1928 tests, +6.)
+- [x] Pin the upstream provider — `ProviderRouting` (`providers.<name>.providerRouting`) and
+      `ARNES_PROVIDER_ONLY` in the Harbor adapter. A model id names a *model*, not a machine:
+      OpenRouter picks an upstream provider per request, and the same slug served by different
+      providers differs in latency, price and output quality. Measured: `openrouter/auto` and
+      `z-ai/glm-5.3-flash` — the model auto picks — reached **disjoint** provider pools (Modal,
+      Together versus Novita, Relace, Wafer), one pinned run hit the deadline where no auto run
+      did, and one provider returned content wholly unrelated to the task, which the verifier
+      scored as an ordinary failure. Unpinned, that variance is larger than most of what a
+      harness comparison measures and invisible in the result. The SDK had `ProviderPreferences`
+      (`only`/`order`/`ignore`/`allowFallbacks`) all along; the Kit used it zero times. Now
+      `ProviderConfig.providerRouting` → `ResolvedProvider` → `ProviderTraits.providerRouting` →
+      `Session.providerPreferences`, attached to every request the loop sends: the streaming chat
+      request, `/messages`, `/responses`, the compaction summarizer and the side call.
+      `allowFallbacks` defaults to **false** for a stated pin — a pin that silently falls back is
+      worse than none, because the run still looks pinned in its own provenance — while an
+      explicit `true` still opts back in. Only the OpenRouter kind carries the block; a gateway
+      would reject the unknown key, and `ResolvedProvider.traits` drops it for every other kind.
+      An unpinned request body is byte-identical to before this existed (pinned). (1935 tests, +4;
+      52 offline adapter tests, +3.)
 - [x] Plan the context window against what *answered*, not what was asked for —
       `Session.effectiveContextLength`. A router alias states its own window (`openrouter/auto`
       advertises 2,000,000) while the model it picks may have a fraction of it: the pilot's alias

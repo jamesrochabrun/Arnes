@@ -1,4 +1,5 @@
 import Foundation
+import OpenRouterSwift
 
 // MARK: - ProviderKind
 
@@ -224,6 +225,14 @@ public struct ProviderConfig: Codable, Sendable, Equatable {
   /// command (enriching the prompt, or vetoing a headless `--yes` run) but never approve one
   /// the deterministic layers blocked. Off unless set. A free/cheap model is the point.
   public var bashJudge: String?
+  /// Which upstream providers may serve this model (OpenRouter only; other kinds ignore it).
+  ///
+  /// A model id names a *model*, not a machine: OpenRouter picks an upstream provider per
+  /// request, and the same slug can be served by several with different latency, price and
+  /// — observed on 2026-09-10 — different output quality, one of them returning content
+  /// unrelated to the request. For a benchmark or any reproducible comparison that is an
+  /// uncontrolled variable larger than most of the things being measured, so pin it.
+  public var providerRouting: ProviderRouting?
   /// Opt-in OS confinement for the `bash` tool. Off unless set. See `SandboxConfig`.
   public var sandbox: SandboxConfig?
   /// Defaults for delegated work — the subagent model, step/dollar caps. See `SubagentsConfig`.
@@ -260,7 +269,8 @@ public struct ProviderConfig: Codable, Sendable, Equatable {
     subagents: SubagentsConfig? = nil,
     nativeDialects: Bool? = nil,
     insecure: Bool? = nil,
-    reasoningShape: ReasoningShape? = nil)
+    reasoningShape: ReasoningShape? = nil,
+    providerRouting: ProviderRouting? = nil)
   {
     self.kind = kind
     self.baseURL = baseURL
@@ -277,6 +287,7 @@ public struct ProviderConfig: Codable, Sendable, Equatable {
     self.nativeDialects = nativeDialects
     self.insecure = insecure
     self.reasoningShape = reasoningShape
+    self.providerRouting = providerRouting
   }
 
   /// The built-in default — what every arnes install talked to before providers existed.
@@ -911,6 +922,56 @@ public enum ReasoningShape: String, Codable, Sendable {
 /// What the agent loop needs to know about the provider it is talking to — the
 /// request-shaping differences between routers, with the name and default model along
 /// for the ride. `Session` reads these; the CLI builds them from a `ResolvedProvider`.
+/// Upstream-provider pinning for OpenRouter (`provider` on the request body).
+///
+/// `only` is the strict form — serve from these or fail — and is what a reproducible run
+/// wants. `order` prefers without excluding, `ignore` excludes. `allowFallbacks: false`
+/// turns a preference into a requirement: without it OpenRouter may still fall back to a
+/// provider outside the list, which silently reintroduces exactly the variable being pinned.
+public struct ProviderRouting: Codable, Sendable, Equatable {
+  /// Serve only from these upstream providers (`Together`, `Fireworks`, …), else fail.
+  public var only: [String]?
+  /// Preferred order; providers outside it may still serve unless `allowFallbacks` is false.
+  public var order: [String]?
+  /// Never serve from these.
+  public var ignore: [String]?
+  /// Whether OpenRouter may fall back outside `only`/`order`. Defaults to false here — a
+  /// pin that silently unpins itself is worse than no pin, because the run still looks pinned.
+  public var allowFallbacks: Bool?
+
+  public init(
+    only: [String]? = nil, order: [String]? = nil, ignore: [String]? = nil,
+    allowFallbacks: Bool? = nil)
+  {
+    self.only = only
+    self.order = order
+    self.ignore = ignore
+    self.allowFallbacks = allowFallbacks
+  }
+
+  /// Nothing to send when no field is set — an unpinned request stays byte-identical.
+  public var isEmpty: Bool {
+    (only?.isEmpty ?? true) && (order?.isEmpty ?? true) && (ignore?.isEmpty ?? true)
+      && allowFallbacks == nil
+  }
+
+  /// The wire shape, or nil when nothing is pinned.
+  public var preferences: ProviderPreferences? {
+    guard !isEmpty else { return nil }
+    var wire = ProviderPreferences()
+    wire.only = only?.nilIfEmpty
+    wire.order = order?.nilIfEmpty
+    wire.ignore = ignore?.nilIfEmpty
+    // A stated pin defaults to strict; an explicit `true` still opts back into fallbacks.
+    wire.allowFallbacks = allowFallbacks ?? false
+    return wire
+  }
+}
+
+extension Array {
+  fileprivate var nilIfEmpty: [Element]? { isEmpty ? nil : self }
+}
+
 public struct ProviderTraits: Sendable, Equatable {
   public enum FallbackStyle: Sendable, Equatable {
     /// OpenRouter's `models` array: tried in order when the primary fails.
@@ -955,6 +1016,10 @@ public struct ProviderTraits: Sendable, Equatable {
   /// Default chat output-limit spelling when a manifest is silent. Independent of the
   /// reasoning dial: disabling reasoning must not change which request field is accepted.
   public var prefersMaxCompletionTokens: Bool
+  /// Upstream providers this run may use (`ProviderConfig.providerRouting`). nil on every
+  /// non-OpenRouter kind and on any run that pinned nothing, so an unpinned request body is
+  /// byte-identical to before this existed. `preferences` is its wire shape.
+  public var providerRouting: ProviderRouting?
 
   /// A manifest's explicit spelling wins. Sparse OpenAI-style endpoints use
   /// `max_completion_tokens`; OpenRouter and other chat requests use `max_tokens`.
@@ -1065,13 +1130,18 @@ public struct ResolvedProvider: Sendable {
   public let nativeDialects: Bool
   /// The entry's `reasoningShape` override; nil = the kind's default. See `ReasoningShape`.
   public let reasoningShape: ReasoningShape?
+  /// Upstream-provider pin, or nil when the entry pins nothing. See `ProviderRouting`.
+  public let providerRouting: ProviderRouting?
 
   /// Traits for the loop. An entry without a default model gets an empty string, which
   /// `Session` reads as "use the session's own model" for compaction and verification.
   public var traits: ProviderTraits {
-    .forKind(
+    var traits = ProviderTraits.forKind(
       kind, name: name, defaultModel: defaultModel ?? "", nativeDialects: nativeDialects,
       reasoningShape: reasoningShape)
+    // Only OpenRouter takes a `provider` block; a gateway would reject the unknown key.
+    if kind == .openrouter { traits.providerRouting = providerRouting }
+    return traits
   }
 
   /// The model id behind `name` when it is a configured alias; `name` itself otherwise.
@@ -1247,7 +1317,8 @@ public enum ProviderResolver {
       sandbox: entry.sandbox,
       subagents: subagents,
       nativeDialects: nativeDialects,
-      reasoningShape: entry.reasoningShape)
+      reasoningShape: entry.reasoningShape,
+      providerRouting: entry.providerRouting)
   }
 
   // MARK: Pieces

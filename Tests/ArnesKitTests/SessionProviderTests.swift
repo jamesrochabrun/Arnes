@@ -102,6 +102,69 @@ final class SessionProviderTests: XCTestCase {
     XCTAssertNil(Session.estimatedCost(promptTokens: 10, completionTokens: 5, profile: nil))
   }
 
+  // MARK: Upstream-provider pinning
+
+  /// A model id names a model, not a machine: OpenRouter picks an upstream provider per
+  /// request, and the same slug served by different providers differs in latency, price and
+  /// output quality. A benchmark that does not pin this measures the provider lottery too.
+  func testProviderPinReachesEveryRequest() async throws {
+    let mock = MockOpenRouterService()
+    mock.manifestJSON = Fixtures.manifest(Fixtures.manifestModel(id: "test/model"))
+    mock.chunkScripts = [[Fixtures.textChunk("hi"), Fixtures.usageChunk(cost: 0)]]
+    var traits = ProviderTraits.openrouter
+    traits.providerRouting = ProviderRouting(only: ["Together"])
+    let session = Session(
+      service: mock, tools: [], store: store(),
+      configuration: .init(model: "test/model", provider: traits))
+    for try await _ in await session.send("go") { }
+    let sent = try XCTUnwrap(mock.requests.first)
+    let wire = try XCTUnwrap(sent.provider)
+    XCTAssertEqual(wire.only, ["Together"])
+    // A pin that silently unpins itself is worse than no pin: the run still looks pinned.
+    XCTAssertEqual(wire.allowFallbacks, false)
+  }
+
+  func testUnpinnedRequestsAreUnchanged() async throws {
+    let mock = MockOpenRouterService()
+    mock.manifestJSON = Fixtures.manifest(Fixtures.manifestModel(id: "test/model"))
+    mock.chunkScripts = [[Fixtures.textChunk("hi"), Fixtures.usageChunk(cost: 0)]]
+    let session = Session(
+      service: mock, tools: [], store: store(),
+      configuration: .init(model: "test/model"))
+    for try await _ in await session.send("go") { }
+    XCTAssertNil(try XCTUnwrap(mock.requests.first).provider,
+                 "an unpinned body must stay byte-identical to before pinning existed")
+  }
+
+  func testEmptyRoutingSendsNothingAndFallbacksStayOptIn() {
+    XCTAssertTrue(ProviderRouting().isEmpty)
+    XCTAssertNil(ProviderRouting().preferences)
+    XCTAssertNil(ProviderRouting(only: []).preferences, "an empty list is not a pin")
+    // Asking for fallbacks explicitly is still honored.
+    let loose = ProviderRouting(order: ["Together"], allowFallbacks: true)
+    XCTAssertEqual(loose.preferences?.allowFallbacks, true)
+    XCTAssertEqual(loose.preferences?.order, ["Together"])
+  }
+
+  /// Only OpenRouter takes a `provider` block; a gateway would reject the unknown key.
+  func testOnlyOpenRouterCarriesThePin() {
+    let pin = ProviderRouting(only: ["Together"])
+    let credentials = FileManager.default.temporaryDirectory
+      .appendingPathComponent("arnes-no-credentials-\(UUID().uuidString).json")
+    func traits(for kind: ProviderKind) throws -> ProviderTraits {
+      try ProviderResolver.resolve(
+        name: "p",
+        entry: ProviderConfig(
+          kind: kind, baseURL: "https://gateway.example.com/v1", apiKey: "k",
+          providerRouting: pin),
+        environment: [:], credentialsURL: credentials).traits
+    }
+    for kind in [ProviderKind.litellm, .openaiCompatible] {
+      XCTAssertNil(try traits(for: kind).providerRouting, "\(kind) must not receive the block")
+    }
+    XCTAssertEqual(try traits(for: .openrouter).providerRouting, pin)
+  }
+
   /// A router alias prices its tokens as `-1` — "varies with whatever it picks". Taken at face
   /// value that is a *negative* estimate: the session's spend walks backwards and `--budget`
   /// never trips. Observed live on `openrouter/auto`, whose manifest row reads
