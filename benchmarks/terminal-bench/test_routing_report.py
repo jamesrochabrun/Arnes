@@ -93,12 +93,25 @@ class RoutingReportTests(unittest.TestCase):
     row = routing_report.trial_row(next(job.glob("*")), "auto")
     self.assertIn("cost_estimated", row["flags"])
 
-  def test_unverified_trial_is_not_a_failure(self):
+  def test_a_task_without_ctrf_still_counts_against_the_score(self):
+    """Not every task writes a pytest report. Dropping those inflates the pass rate."""
     job = self.root / "auto"
     make_trial(job, "alpha", passed=False, ctrf=False)
     row = routing_report.trial_row(next(job.glob("*")), "auto")
-    self.assertFalse(row["scored"])
+    self.assertTrue(row["scored"], "Harbor judged it; the audit merely could not corroborate")
     self.assertFalse(row["passed"])
+    self.assertIn("unaudited_verdict", row["flags"])
+    summary = routing_report.summarize_arm("auto", [row])
+    self.assertEqual(summary["scored"], 1)
+    self.assertEqual(summary["pass_rate"], 0.0)
+
+  def test_only_an_unjudgeable_trial_leaves_the_denominator(self):
+    """An infrastructure exception has no reward at all — that is the one exclusion."""
+    job = self.root / "auto"
+    trial = make_trial(job, "alpha", passed=False, ctrf=False)
+    write(trial / "result.json", dict(task_name="alpha", verifier_result=dict(rewards={})))
+    row = routing_report.trial_row(trial, "auto")
+    self.assertFalse(row["scored"])
     summary = routing_report.summarize_arm("auto", [row])
     self.assertIsNone(summary["pass_rate"])
     self.assertEqual(summary["unscored"], 1)

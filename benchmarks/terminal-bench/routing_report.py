@@ -14,8 +14,11 @@ from pathlib import Path
 
 from check_verification import inspect_trial
 
-# A trial only enters a pass rate when the agent actually attempted the task and the task's
-# own checks reached a verdict. Everything else is reliability evidence, reported separately.
+# The task's own verifier is the authority on a trial: Harbor's reward is the score, and only a
+# trial it could not judge at all (an infrastructure exception, reward absent) leaves the
+# denominator. The CTRF audit below is a *check* on that reward — it catches a task whose tests
+# never ran — and is reported as a flag; it must never silently shrink the denominator, because
+# a task that simply doesn't write CTRF would then vanish from the score and inflate it.
 SCORED_VERIFICATION = {"passed", "failed"}
 
 
@@ -85,8 +88,8 @@ def trial_row(directory, arm):
   row = dict(
     arm=arm, task=verification.get("task"), trial=directory.name,
     verification=verification.get("verification"), raw_reward=verification.get("raw_reward"),
-    passed=verification.get("verification") == "passed",
-    scored=verification.get("verification") in SCORED_VERIFICATION,
+    passed=verification.get("raw_reward") == 1,
+    scored=verification.get("raw_reward") is not None,
     requested_model=provenance.get("model"), requested_effort=provenance.get("effort"),
     routed_models=sorted(set(routed) | set(recorded)), routing_timeline=events["routing"],
     routing_switches=max(len(dict.fromkeys(routed)) - 1, 0),
@@ -131,6 +134,10 @@ def trial_flags(row):
     # No explicit notice — an older binary predates it — so fall back to the symptom: a run
     # that asked for an effort and emitted no reasoning very likely never sent the parameter.
     flags.append("effort_requested_without_reasoning")
+  if row["scored"] and row["verification"] not in SCORED_VERIFICATION:
+    # Harbor scored it, but its test report was missing, partial or inconsistent. The reward
+    # stands; this says the audit could not corroborate it.
+    flags.append("unaudited_verdict")
   if row["routing_switches"]:
     flags.append("routing_changed_mid_run")
   if not row["routed_models"] and row["scored"]:
