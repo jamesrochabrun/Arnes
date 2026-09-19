@@ -1391,3 +1391,67 @@ struct EvalTranscriptsDocument: Encodable, Equatable {
   let type = "eval_transcripts"
   let rows: [EvalTranscriptRow]
 }
+
+// MARK: - decide --json
+
+/// One answer in `arnes decide --json`. The populated fields follow the question's type
+/// (noul → `noul`; choice → `choice`/`probabilities`/`confidence`; score → `score`/
+/// `probabilities`/`legend`/`confidence`); `type` names it when the API did.
+struct DecisionAnswerOut: Encodable, Equatable {
+  let type: String?
+  let noul: Double?
+  let choice: String?
+  let score: Double?
+  let confidence: Double?
+  let probabilities: [String: Double]?
+  let legend: [String: String]?
+
+  init(_ answer: DecisionAnswer) {
+    type = answer.type?.rawValue
+    noul = JSONOut.finite(answer.noul)
+    choice = answer.choice
+    score = JSONOut.finite(answer.score)
+    confidence = JSONOut.finite(answer.confidence)
+    probabilities = answer.probabilities?.mapValues { JSONOut.finite($0) ?? 0 }
+    legend = answer.legend
+  }
+}
+
+/// The one document `arnes decide --json` prints. Keys are additive forever; usage keeps
+/// the wire spellings so a script reads this like the raw API response.
+struct DecisionDocument: Encodable, Equatable {
+  struct Usage: Encodable, Equatable {
+    @Nullable var inputTokens: Int?
+    @Nullable var outputTokens: Int?
+    @Nullable var cost: Double?
+
+    enum CodingKeys: String, CodingKey {
+      case cost
+      case inputTokens = "input_tokens"
+      case outputTokens = "output_tokens"
+    }
+  }
+
+  let type = "decision"
+  /// The slug asked for; `model` is what answered, post-routing.
+  let requested: String
+  @Nullable var model: String?
+  @Nullable var provider: String?
+  @Nullable var id: String?
+  let answers: [String: DecisionAnswerOut]
+  @Nullable var usage: Usage?
+
+  init(requested: String, response: DecisionResponse) {
+    self.requested = requested
+    model = response.model
+    provider = response.provider
+    id = response.id
+    answers = response.answers.mapValues(DecisionAnswerOut.init)
+    usage = response.usage.map {
+      Usage(
+        inputTokens: $0.inputTokens,
+        outputTokens: $0.outputTokens,
+        cost: JSONOut.finite($0.cost))
+    }
+  }
+}

@@ -1457,6 +1457,32 @@ requires the block before the last `tool_use` — and thinking returns with the 
 and a model whose manifest `max_completion_tokens` is under 2048 never thinks (no budget fits
 under the ceiling with the headroom Anthropic requires).
 
+## Typed decisions — "route this", "classify with jev", "score this ticket"
+
+```bash
+arnes decide "Help! Payouts failing for 3 days." --questions questions.json
+arnes decide --questions '{"urgent": {"type": "noul", "instructions": "Is this urgent?"}}' < ticket.txt
+arnes decide '{"ticket": "prod is down"}' --state-json --questions q.json --json
+```
+
+System One decision models (`typesafe/jev-1.13`, the default `-m`) generate **no text**:
+they answer typed questions about a state with calibrated probabilities — `noul` (yes/no
+probability), `choice` (a pick from your options + per-option probabilities), `score` (a
+position on your 2–10-level rubric; the answer may be fractional, it's an expected level).
+Use it for routing, ranking and verification where you act on numbers, not prose; a single
+call costs ~$0.00002. Questions are JSON inline (starts with `{`) or a file path; criteria
+are `{key: description}` for noul/choice and an ordered array for score. The state rides
+the argument or stdin (`-`), `--state-json` sends it as an object/array. This is
+OpenRouter's `POST /api/alpha/decisions` (alpha) — a LiteLLM or other OpenAI-compatible
+gateway refuses it. Every call appends a RunRecord (dialect `decisions`), so `arnes runs`
+shows decision spend beside agent runs.
+
+`--json` prints one document: `{type: "decision", requested, model, provider, id,
+answers: {name: {type, noul?, choice?, score?, confidence?, probabilities?, legend?}},
+usage: {input_tokens, output_tokens, cost} | null}` — `model` is post-routing (e.g.
+`typesafe/jev-1.13-20260917`), `requested` is the slug you asked for. Score
+`probabilities`/`legend` are keyed by stringified level index (`"0"`, `"1"`, …).
+
 ## Capture an eval from a fumble — "make an eval from that"
 
 When the user says the agent fumbled something and wants it as a reusable test:

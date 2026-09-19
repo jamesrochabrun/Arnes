@@ -157,7 +157,11 @@ library, UI-free) and `arnes` (CLI).
   `Runtime.swift` (provider, catalog, hooks, limits),
   `HeadlessOutput.swift`/`ExitCodes.swift` (the `do` contract), one file per subcommand
   (`Eval`, `Evals`, `Probe`, `Mcp`, `Skills`, `Agents`, `Hooks`, `Providers`, `Trust`, `Doctor`,
-  `Debug`, `Review`, `Memory`, `Init`), `JSONOutput.swift` (`--json` DTOs, additive forever).
+  `Debug`, `Review`, `Memory`, `Init`, `Decide` — typed decisions over OpenRouter's
+  `POST /api/alpha/decisions`, System One models like `typesafe/jev-1.13`: state + noul/choice/
+  score questions → calibrated probabilities, no text; wire types upstream in OpenRouterSwift
+  0.3.0 `decide(_:)`, every call a RunRecord with dialect `decisions`),
+  `JSONOutput.swift` (`--json` DTOs, additive forever).
 - `Tests/ArnesKitTests` (mock service in `Mocks/`, `Support/Latch`), `Tests/ArnesCLITests`
   (`@testable import arnes`), `evals/` (JSON suites), `benchmarks/terminal-bench`,
   `.claude/skills/arnes/SKILL.md` (the agent-facing CLI contract).
