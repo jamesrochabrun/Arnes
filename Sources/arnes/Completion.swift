@@ -28,6 +28,7 @@ enum SlashCompletion {
     Item(name: "/budget", hint: "session cost ceiling"),
     Item(name: "/schema", hint: "JSON schema for each turn's answer"),
     Item(name: "/verify", hint: "verify the last turn with a second model"),
+    Item(name: "/decide", hint: "typed jev decision about a state — probabilities, no text"),
     Item(name: "/compact", hint: "summarize older turns to free context"),
     Item(name: "/save", hint: "name this session for later resume"),
     Item(name: "/resume", hint: "switch to another saved session"),

@@ -24,6 +24,9 @@ struct ReplDials {
   let catalog: ModelCatalog
   /// The `--agent` the session runs as, for `/status`; nil for a plain session.
   let agent: String?
+  /// The provider service `/decide` calls (the Decisions API rides no session). Defaulted
+  /// so the dial-only tests that build a ReplDials without a network stay unchanged.
+  var service: OpenRouterService? = nil
 }
 
 // MARK: - Dial arguments

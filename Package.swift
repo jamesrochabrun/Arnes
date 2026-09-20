@@ -11,10 +11,11 @@ let package = Package(
     .executable(name: "arnes", targets: ["arnes"]),
   ],
   dependencies: [
-    // 0.2.0 carries `Message.reasoningDetails` (the slot a tool loop replays signed/encrypted
-    // reasoning through), the `reasoning_effort` wire pin and sorted-keys request encoding —
-    // three changes made upstream in OpenRouterSwift. Nothing older builds this tree.
-    .package(url: "https://github.com/jamesrochabrun/OpenRouterSwift", from: "0.2.0"),
+    // 0.3.0 carries the Decisions API (`decide(_:)`, `arnes decide`'s wire) on top of 0.2.0's
+    // `Message.reasoningDetails` (the slot a tool loop replays signed/encrypted reasoning
+    // through), `reasoning_effort` wire pin and sorted-keys request encoding — all changes
+    // made upstream in OpenRouterSwift. Nothing older builds this tree.
+    .package(url: "https://github.com/jamesrochabrun/OpenRouterSwift", from: "0.3.0"),
     // OpenRouterSwift's injectable HTTP client is a SwiftOpenAI protocol; the gateway
     // transport (URL rewriting for LiteLLM-style providers) implements it.
     // 4.6.2 preserves streaming JSON and UTF-8 across arbitrary Linux HTTP chunks.

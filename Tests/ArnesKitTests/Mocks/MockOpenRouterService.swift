@@ -19,6 +19,7 @@ extension OpenRouterService {
   public func embeddings(_ request: EmbeddingsRequest) async throws -> EmbeddingsResponse { unimplemented() }
   public func embeddingsModels() async throws -> [OpenRouterModel] { unimplemented() }
   public func rerank(_ request: RerankRequest) async throws -> RerankResponse { unimplemented() }
+  public func decide(_ request: DecisionRequest) async throws -> DecisionResponse { unimplemented() }
   public func presets(offset: Int?, limit: Int?) async throws -> PresetList { unimplemented() }
   public func preset(slug: String) async throws -> PresetDetail { unimplemented() }
   public func presetVersions(slug: String, offset: Int?, limit: Int?) async throws -> PresetVersionList { unimplemented() }

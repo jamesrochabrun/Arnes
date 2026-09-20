@@ -52,6 +52,9 @@ enum SlashCommand: Equatable {
   /// `/schema [file|json|off]` — show, set or clear the structured-output schema a finished
   /// turn's answer is asked for (nil = show; not persisted, like the budget).
   case schema(argument: String?)
+  /// `/decide <questions> <state>` — a typed decision (noul/choice/score probabilities) from a
+  /// System One model; the full answer prints in the UI, the agent sees it via a notice.
+  case decide(argument: String?)
   /// `/mcp [server]` — the connected MCP servers (status, tools, prompts); a name lists that
   /// server's tools and prompts. Information only: the toolset is fixed at session start.
   case mcp(server: String?)
@@ -96,6 +99,7 @@ enum SlashCommand: Equatable {
     case "thinking": return .thinking(mode: argument)
     case "budget": return .budget(argument: argument)
     case "schema": return .schema(argument: argument)
+    case "decide": return .decide(argument: argument)
     case "mcp": return .mcp(server: argument)
     case "help": return .help
     case "exit", "quit", "q": return .exit
@@ -139,8 +143,59 @@ enum SlashCommand: Equatable {
     case .schema(let argument): return .schema(argument: argument.map(expand))
     case .btw(let question): return .btw(question: question.map(expand))
     case .compact(let argument): return .compact(argument: argument.map(expand))
+    case .decide(let argument): return .decide(argument: argument.map(expand))
     default: return command
     }
+  }
+
+  static let decideUsage = """
+    usage: /decide <questions> <state> — typed decision from a System One model \
+    (\(Decide.defaultModel)): questions inline {"name": {"type": "noul|choice|score", \
+    "instructions": …, "criteria": …}} or a JSON file path, the state is everything after; \
+    the answer is calibrated probabilities, never text
+    """
+
+  /// `/decide <questions> <state…>`: the questions are inline JSON — brace-matched, so a
+  /// state may hold spaces and braces of its own — or a file path (the first whitespace
+  /// token); everything after is the state. nil when the line is blank; a nil state is the
+  /// caller's usage error. Unbalanced inline JSON comes back whole so the questions parser
+  /// reports it instead of the split guessing.
+  static func decideArguments(_ argument: String?) -> (questions: String, state: String?)? {
+    guard let trimmed = argument?.trimmingCharacters(in: .whitespaces), !trimmed.isEmpty else {
+      return nil
+    }
+    if trimmed.hasPrefix("{") {
+      guard let end = matchingBrace(in: trimmed) else { return (trimmed, nil) }
+      let rest = String(trimmed[trimmed.index(after: end)...]).trimmingCharacters(in: .whitespaces)
+      return (String(trimmed[...end]), rest.isEmpty ? nil : rest)
+    }
+    let parts = trimmed.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+    let rest = parts.count > 1 ? String(parts[1]).trimmingCharacters(in: .whitespaces) : ""
+    return (String(parts[0]), rest.isEmpty ? nil : rest)
+  }
+
+  /// The index of the `}` closing the object `text` starts with — JSON-string-aware, so a
+  /// brace inside `"instructions"` never ends the match. nil when unbalanced.
+  private static func matchingBrace(in text: String) -> String.Index? {
+    var depth = 0
+    var inString = false
+    var escaped = false
+    for index in text.indices {
+      if escaped {
+        escaped = false
+        continue
+      }
+      switch text[index] {
+      case "\\" where inString: escaped = true
+      case "\"": inString.toggle()
+      case "{" where !inString: depth += 1
+      case "}" where !inString:
+        depth -= 1
+        if depth == 0 { return index }
+      default: break
+      }
+    }
+    return nil
   }
 
   static let helpText = """
@@ -157,6 +212,10 @@ enum SlashCommand: Equatable {
                      schema (a path or inline {…}), printed under the reply; /schema off stops,
                      /schema alone shows the one in force (not persisted — pass --output-schema)
     /verify [model]  verify the last turn with a second model (default: openrouter/auto)
+    /decide <questions> <state> ask a decision model (typesafe/jev-1.13) typed noul/choice/
+                     score questions about a state — questions inline {…} or a JSON file path.
+                     The full probabilities print here; the agent sees them with your next
+                     message. No text is generated (arnes decide is the headless twin)
     /compact [model] [instructions] summarize older turns to free context (also automatic at
                      ~80% full, after older tool results are cleared from requests); the first
                      word is a model only if it has a / or is a configured alias — the rest
