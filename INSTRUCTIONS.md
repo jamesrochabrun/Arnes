@@ -6387,5 +6387,11 @@ Bun installs work). `scripts/npm-release.sh` generates the publishable dirs; aut
       SKILL.md's Typed decisions section. (6 new CLI tests: brace matching incl. a `}` inside a
       JSON string and unbalanced input returned whole, file-path split, parse + paste expansion,
       help/completion presence, and notice ≡ UI lines; suite 1948 green.)
+      Follow-up (same day): `.arnes/skills/jev/SKILL.md` — a project skill teaching the session
+      model to turn "measure X, show me Y" into the whole flow itself: author the questions
+      JSON, run `arnes decide --json` through its bash tool (the subprocess re-authenticates
+      from `~/.arnes/credentials`, so the withheld token env var doesn't strand it), and render
+      the probabilities in the asked-for format without flattening them into prose verdicts.
+      Loads in trusted checkouts and shadows any user-global copy of the same name.
 - [ ] OS sandbox: Linux backend (bwrap/landlock); macOS shipped.
 - [ ] Scoreboard-driven routing defaults; gated pack proposals
