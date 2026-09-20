@@ -93,6 +93,66 @@ final class DecideCommandTests: XCTestCase {
       "department=billing · frustration=1.03 · is_urgent=0.95")
   }
 
+  // MARK: /decide argument split
+
+  func testDecideArgumentsBraceMatchesInlineJSON() {
+    // Nested braces and a brace inside a JSON string must not end the questions early.
+    let split = SlashCommand.decideArguments(
+      #"{"q": {"type": "noul", "instructions": "weird } brace"}} Payouts failing {for} 3 days"#)
+    XCTAssertEqual(split?.questions, #"{"q": {"type": "noul", "instructions": "weird } brace"}}"#)
+    XCTAssertEqual(split?.state, "Payouts failing {for} 3 days")
+  }
+
+  func testDecideArgumentsFilePathForm() {
+    let split = SlashCommand.decideArguments("  questions.json   Payouts failing for 3 days ")
+    XCTAssertEqual(split?.questions, "questions.json")
+    XCTAssertEqual(split?.state, "Payouts failing for 3 days")
+
+    let missingState = SlashCommand.decideArguments("questions.json")
+    XCTAssertEqual(missingState?.questions, "questions.json")
+    XCTAssertNil(missingState?.state)
+
+    XCTAssertNil(SlashCommand.decideArguments(nil))
+    XCTAssertNil(SlashCommand.decideArguments("   "))
+  }
+
+  func testDecideArgumentsUnbalancedJSONComesBackWhole() {
+    // The questions parser owns the error message; the split must not guess.
+    let split = SlashCommand.decideArguments(#"{"q": {"type": "noul" state text"#)
+    XCTAssertEqual(split?.questions, #"{"q": {"type": "noul" state text"#)
+    XCTAssertNil(split?.state)
+  }
+
+  func testDecideSlashCommandParsesAndExpandsPastes() {
+    XCTAssertEqual(
+      SlashCommand.parse("/decide q.json is this urgent"),
+      .decide(argument: "q.json is this urgent"))
+    let expanded = SlashCommand.expandingPastes(
+      .decide(argument: "[Pasted text #1 +3 lines] state"),
+      with: { $0.replacingOccurrences(of: "[Pasted text #1 +3 lines]", with: #"{"q": {"type": "noul"}}"#) })
+    XCTAssertEqual(expanded, .decide(argument: #"{"q": {"type": "noul"}} state"#))
+  }
+
+  func testDecideIsListedInHelpAndCompletion() {
+    XCTAssertTrue(SlashCommand.helpText.contains("/decide <questions> <state>"))
+    XCTAssertTrue(SlashCompletion.builtins.contains { $0.name == "/decide" })
+  }
+
+  // MARK: The agent's notice
+
+  func testNoticeCarriesStateAndTheFullRenderedAnswer() throws {
+    let notice = Decide.notice(
+      state: "Help! My payouts have been failing for 3 days.",
+      response: try decodedFixture(),
+      requested: "typesafe/jev-1.13")
+    XCTAssertTrue(notice.contains("The user ran /decide"))
+    XCTAssertTrue(notice.contains("state: Help! My payouts have been failing for 3 days."))
+    // The same lines the UI printed, so agent and user read one answer.
+    for line in Decide.lines(for: try decodedFixture(), requested: "typesafe/jev-1.13") {
+      XCTAssertTrue(notice.contains(line), "notice should carry: \(line)")
+    }
+  }
+
   // MARK: --json document
 
   func testDecisionDocumentLineIsStable() throws {

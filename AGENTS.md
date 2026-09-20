@@ -160,7 +160,9 @@ library, UI-free) and `arnes` (CLI).
   `Debug`, `Review`, `Memory`, `Init`, `Decide` — typed decisions over OpenRouter's
   `POST /api/alpha/decisions`, System One models like `typesafe/jev-1.13`: state + noul/choice/
   score questions → calibrated probabilities, no text; wire types upstream in OpenRouterSwift
-  0.3.0 `decide(_:)`, every call a RunRecord with dialect `decisions`),
+  0.3.0 `decide(_:)`, every call a RunRecord with dialect `decisions`; the REPL twin is
+  `/decide <questions> <state>` — full answer printed in the UI, the same render handed to
+  the agent via `Session.notify`, never a tool or a turn),
   `JSONOutput.swift` (`--json` DTOs, additive forever).
 - `Tests/ArnesKitTests` (mock service in `Mocks/`, `Support/Latch`), `Tests/ArnesCLITests`
   (`@testable import arnes`), `evals/` (JSON suites), `benchmarks/terminal-bench`,

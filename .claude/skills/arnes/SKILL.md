@@ -1477,6 +1477,11 @@ OpenRouter's `POST /api/alpha/decisions` (alpha) — a LiteLLM or other OpenAI-c
 gateway refuses it. Every call appends a RunRecord (dialect `decisions`), so `arnes runs`
 shows decision spend beside agent runs.
 
+In the REPL the same call is `/decide <questions> <state>` (questions inline `{…}` —
+brace-matched, so the state may contain braces — or a file path): the full answer prints in
+the terminal and the agent sees the identical render as a notice with the user's next
+message; it never runs a turn by itself.
+
 `--json` prints one document: `{type: "decision", requested, model, provider, id,
 answers: {name: {type, noul?, choice?, score?, confidence?, probabilities?, legend?}},
 usage: {input_tokens, output_tokens, cost} | null}` — `model` is post-routing (e.g.

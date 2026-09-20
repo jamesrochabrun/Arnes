@@ -1309,7 +1309,8 @@ struct Interactive: AsyncParsableCommand {
       hooks: runtime.bannerHooks(hooks),
       readOnly: readOnly,
       catalog: runtime.catalog,
-      agent: leadAgent?.name)
+      agent: leadAgent?.name,
+      service: runtime.service)
 
     // Typing during a turn queues input: completed lines (Enter pressed) run as the
     // next messages in order, an unfinished fragment pre-fills the next prompt.
@@ -1951,6 +1952,9 @@ struct Interactive: AsyncParsableCommand {
     case .schema(let argument):
       await handleSchema(argument, session: session, screen: screen)
 
+    case .decide(let argument):
+      await handleDecide(argument, session: session, spinner: spinner, screen: screen, dials: dials)
+
     case .verify(let verifier):
       spinner.start("verifying")
       defer { spinner.stop() }
@@ -2488,6 +2492,57 @@ struct Interactive: AsyncParsableCommand {
     } catch {
       spinner.stop()
       screen.print(ANSI.red(TerminalText.sanitize("btw failed: \(error)")))
+    }
+  }
+
+  /// `/decide <questions> <state>`: one Decisions API call from the REPL — the full jev
+  /// answer (every probability) prints here whatever the agent gets, then rides
+  /// `Session.notify` so the model sees it with the next message; never a turn of its own.
+  /// Same record discipline as `arnes decide` (invariant 4).
+  private func handleDecide(
+    _ argument: String?, session: Session, spinner: Spinner, screen: Screen, dials: ReplDials)
+    async
+  {
+    guard let service = dials.service else {
+      screen.print(ANSI.dim("decisions need a provider connection — this session has none"))
+      return
+    }
+    guard let (questionsRaw, state) = SlashCommand.decideArguments(argument) else {
+      screen.print(ANSI.dim(SlashCommand.decideUsage))
+      return
+    }
+    guard let state else {
+      screen.print(ANSI.dim("no state after the questions — " + SlashCommand.decideUsage))
+      return
+    }
+    let questions: [String: DecisionQuestion]
+    do {
+      questions = try Decide.loadQuestions(
+        questionsRaw, relativeTo: URL(fileURLWithPath: FileManager.default.currentDirectoryPath))
+    } catch {
+      screen.print(ANSI.yellow(TerminalText.sanitize("\(error)")))
+      return
+    }
+
+    let model = Decide.defaultModel
+    var record = Decide.makeRecord(state: state, model: model, provider: dials.provider)
+    spinner.start("deciding")
+    do {
+      let response = try await service.decide(
+        DecisionRequest(model: model, state: .string(state), questions: questions))
+      spinner.stop()
+      Decide.finish(&record, with: response)
+      try? RunRecordStore().append(record)
+      for line in Decide.lines(for: response, requested: model) {
+        screen.print(TerminalText.sanitize(line))
+      }
+      await session.notify(Decide.notice(state: state, response: response, requested: model))
+      screen.print(ANSI.dim("— the model sees this decision with your next message"))
+    } catch {
+      spinner.stop()
+      record.summary = String("\(error)".prefix(200))
+      try? RunRecordStore().append(record)
+      screen.print(ANSI.red(TerminalText.sanitize("decide failed: \(error)")))
     }
   }
 

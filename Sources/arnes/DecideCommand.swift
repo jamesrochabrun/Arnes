@@ -33,7 +33,7 @@ struct Decide: AsyncParsableCommand {
   var state: String?
 
   @Option(name: .shortAndLong, help: "Decision model slug or alias (default: typesafe/jev-1.13).")
-  var model = "typesafe/jev-1.13"
+  var model = Decide.defaultModel
 
   @Option(help: "Questions as inline JSON (starts with '{') or a path to a JSON file.")
   var questions: String
@@ -55,14 +55,7 @@ struct Decide: AsyncParsableCommand {
     let runtime = try ArnesRuntime.make(providerOptions)
     let model = runtime.provider.resolveAlias(model)
 
-    var record = RunRecord(
-      task: String(stateText.prefix(200)),
-      model: model,
-      dialect: "decisions",
-      packFamily: ModelFamily(modelId: model).rawValue)
-    record.provider = runtime.traits.name
-    record.steps = 1
-
+    var record = Self.makeRecord(state: stateText, model: model, provider: runtime.traits.name)
     let response: DecisionResponse
     do {
       response = try await runtime.service.decide(
@@ -73,12 +66,7 @@ struct Decide: AsyncParsableCommand {
       throw error
     }
 
-    record.finished = true
-    record.routedModels = response.model.map { [$0] } ?? []
-    record.costUSD = response.usage?.cost ?? 0
-    record.promptTokens = response.usage?.inputTokens
-    record.completionTokens = response.usage?.outputTokens
-    record.summary = Self.summary(of: response)
+    Self.finish(&record, with: response)
     try? RunRecordStore().append(record)
 
     if json {
@@ -101,6 +89,42 @@ struct Decide: AsyncParsableCommand {
   }
 
   // MARK: Pure pieces
+
+  /// The System One model `-m` and `/decide` default to — the current jev release.
+  static let defaultModel = "typesafe/jev-1.13"
+
+  /// The RunRecord every decision call appends (invariant 4), built before the request so a
+  /// failed call still records the unfinished row; `finish` fills the answer's facts.
+  static func makeRecord(state: String, model: String, provider: String) -> RunRecord {
+    var record = RunRecord(
+      task: String(state.prefix(200)),
+      model: model,
+      dialect: "decisions",
+      packFamily: ModelFamily(modelId: model).rawValue)
+    record.provider = provider
+    record.steps = 1
+    return record
+  }
+
+  static func finish(_ record: inout RunRecord, with response: DecisionResponse) {
+    record.finished = true
+    record.routedModels = response.model.map { [$0] } ?? []
+    record.costUSD = response.usage?.cost ?? 0
+    record.promptTokens = response.usage?.inputTokens
+    record.completionTokens = response.usage?.outputTokens
+    record.summary = summary(of: response)
+  }
+
+  /// What `/decide` queues for the model (`Session.notify` → the next `[arnes]` user
+  /// message): the same rendered answer the user saw, framed as harness data.
+  static func notice(state: String, response: DecisionResponse, requested: String) -> String {
+    """
+    The user ran /decide: a System One decision model answered typed questions about this \
+    state with calibrated probabilities (it generates no text; the numbers are the answer).
+    state: \(String(state.prefix(300)))
+    \(lines(for: response, requested: requested).joined(separator: "\n"))
+    """
+  }
 
   /// Questions from the flag: inline JSON when the trimmed value starts with `{`,
   /// else a file path resolved against the working directory.
