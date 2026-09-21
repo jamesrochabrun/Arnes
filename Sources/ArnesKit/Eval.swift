@@ -24,6 +24,11 @@ public struct EvalTask: Codable, Sendable {
   /// Run the loop-1 verifier on this task's trials — with the runner's verifier model only
   /// (`arnes eval --verify <model>`); the flag alone grades nothing, and so does this alone.
   public var verify: Bool?
+  /// Typed questions a decisions model (jev) answers over the same evidence the rubric judge
+  /// reads — calibrated probabilities instead of generated text. The check stays the ground
+  /// truth: like the rubric, a gating jev verdict refines a pass, never rescues a failed
+  /// check. nil = no decisions request.
+  public var jev: Jev?
 
   /// What a judge model scores a trial against, from the evidence only (the task, the final
   /// report, the diff of the working directory, the check's verdict — never the transcript).
@@ -83,6 +88,78 @@ public struct EvalTask: Codable, Sendable {
     public var gates: Bool { gate ?? false }
   }
 
+  /// What a decisions model (jev) is asked about a trial. The question grammar is the wire's
+  /// own (`DecisionQuestion.Kind`/`Criteria` — the same JSON `arnes decide --questions`
+  /// takes); `expect` turns an answer into a pass/fail, and a question without one is
+  /// recorded, never counted.
+  public struct Jev: Codable, Sendable {
+    /// Question name → typed question; the answers come back under the same names.
+    public var questions: [String: Question]
+    /// The decisions judge (id or alias); default the runner's `--judge` when that model is
+    /// decisions-capable, then the runner's decisions default.
+    public var model: String?
+    /// Whether the jev verdict decides `passed` (default true) or is recorded only.
+    public var gate: Bool?
+    /// How many times each trial is judged (1…9); means and variances are folded across the
+    /// repeats. Overrides the runner's `--judge-repeats`.
+    public var repeats: Int?
+    /// The fraction of expected questions that must hold (0…1); default 1.0 — every
+    /// expectation.
+    public var threshold: Double?
+
+    public struct Question: Codable, Sendable {
+      public var type: DecisionQuestion.Kind
+      public var instructions: String
+      /// choice: `{key: description}`; score: the ordered levels, lowest first (2–10).
+      public var criteria: DecisionQuestion.Criteria?
+      public var expect: Expectation?
+
+      public init(
+        type: DecisionQuestion.Kind,
+        instructions: String,
+        criteria: DecisionQuestion.Criteria? = nil,
+        expect: Expectation? = nil)
+      {
+        self.type = type
+        self.instructions = instructions
+        self.criteria = criteria
+        self.expect = expect
+      }
+    }
+
+    /// What must hold for the question to pass, checked against the mean across repeats —
+    /// noul: `min`/`max` bound P(yes); score: `min`/`max` bound the expected level; choice:
+    /// `choice` names the key that must win, `min` its minimum probability.
+    public struct Expectation: Codable, Sendable, Equatable {
+      public var min: Double?
+      public var max: Double?
+      public var choice: String?
+
+      public init(min: Double? = nil, max: Double? = nil, choice: String? = nil) {
+        self.min = min
+        self.max = max
+        self.choice = choice
+      }
+    }
+
+    public init(
+      questions: [String: Question],
+      model: String? = nil,
+      gate: Bool? = nil,
+      repeats: Int? = nil,
+      threshold: Double? = nil)
+    {
+      self.questions = questions
+      self.model = model
+      self.gate = gate
+      self.repeats = repeats
+      self.threshold = threshold
+    }
+
+    public var gates: Bool { gate ?? true }
+    public var effectiveThreshold: Double { threshold ?? 1.0 }
+  }
+
   public init(
     id: String,
     prompt: String,
@@ -91,7 +168,8 @@ public struct EvalTask: Codable, Sendable {
     timeoutSeconds: Int? = nil,
     rubric: Rubric? = nil,
     limits: Limits? = nil,
-    verify: Bool? = nil)
+    verify: Bool? = nil,
+    jev: Jev? = nil)
   {
     self.id = id
     self.prompt = prompt
@@ -101,6 +179,7 @@ public struct EvalTask: Codable, Sendable {
     self.rubric = rubric
     self.limits = limits
     self.verify = verify
+    self.jev = jev
   }
 }
 
@@ -214,6 +293,35 @@ public struct EvalOutcome: Codable, Sendable {
   /// an unlabelled row is byte-identical to what it always was.
   public var label: String?
 
+  // Jev (decisions) judging — every field nil on a row that had none, so old rows and
+  // undjudged trials read exactly as before.
+
+  /// The resolved primary judge, on any rubric- or jev-graded row — which model the
+  /// verdict came from, for `arnes evals judges`.
+  public var judgeModel: String?
+  /// The jev block's score: the fraction of expected questions whose expectation held
+  /// (checked against the mean across repeats).
+  public var jevScore: Double?
+  /// `jevScore` at or above the task's threshold, and not unknown.
+  public var jevPassed: Bool?
+  /// The decisions request failed or an answer was missing (`jevNotes` says which).
+  public var jevUnknown: Bool?
+  /// Which questions missed and by how much, ≤ 500 chars.
+  public var jevNotes: String?
+  /// How many times the trial was judged — written only when > 1.
+  public var jevRepeats: Int?
+  /// Sample variance of the per-repeat score — the repeatability signal. Only under repeats.
+  public var jevVariance: Double?
+  /// Per-question record: mean, variance, verdict, picked choice — the audit trail behind
+  /// `jevScore`.
+  public var jevQuestions: [JevQuestionRecord]?
+  /// The `--second-judge` model, when the run graded every rubric task twice. The second
+  /// verdict is recorded for alignment (`arnes evals judges`), never gating.
+  public var secondJudgeModel: String?
+  public var secondRubricScore: Double?
+  public var secondRubricPassed: Bool?
+  public var secondRubricUnknown: Bool?
+
   /// The verdict a scoreboard counts: the graded one when the trial had graders, else the
   /// check's — so a row without graders aggregates exactly as it always did.
   public var isPass: Bool { passed ?? checkPassed }
@@ -225,6 +333,9 @@ public struct EvalOutcome: Codable, Sendable {
     case verifierPassed, graderCostUSD, sessionId, runId, promptTokens, completionTokens
     case stopReason, passed
     case label
+    case judgeModel, jevScore, jevPassed, jevUnknown, jevNotes, jevRepeats, jevVariance
+    case jevQuestions, secondJudgeModel, secondRubricScore, secondRubricPassed
+    case secondRubricUnknown
   }
 
   public init(from decoder: Decoder) throws {
@@ -259,6 +370,18 @@ public struct EvalOutcome: Codable, Sendable {
     stopReason = try container.decodeIfPresent(String.self, forKey: .stopReason)
     passed = try container.decodeIfPresent(Bool.self, forKey: .passed)
     label = try container.decodeIfPresent(String.self, forKey: .label)
+    judgeModel = try container.decodeIfPresent(String.self, forKey: .judgeModel)
+    jevScore = try container.decodeIfPresent(Double.self, forKey: .jevScore)
+    jevPassed = try container.decodeIfPresent(Bool.self, forKey: .jevPassed)
+    jevUnknown = try container.decodeIfPresent(Bool.self, forKey: .jevUnknown)
+    jevNotes = try container.decodeIfPresent(String.self, forKey: .jevNotes)
+    jevRepeats = try container.decodeIfPresent(Int.self, forKey: .jevRepeats)
+    jevVariance = try container.decodeIfPresent(Double.self, forKey: .jevVariance)
+    jevQuestions = try container.decodeIfPresent([JevQuestionRecord].self, forKey: .jevQuestions)
+    secondJudgeModel = try container.decodeIfPresent(String.self, forKey: .secondJudgeModel)
+    secondRubricScore = try container.decodeIfPresent(Double.self, forKey: .secondRubricScore)
+    secondRubricPassed = try container.decodeIfPresent(Bool.self, forKey: .secondRubricPassed)
+    secondRubricUnknown = try container.decodeIfPresent(Bool.self, forKey: .secondRubricUnknown)
   }
 
   public init(
@@ -291,7 +414,19 @@ public struct EvalOutcome: Codable, Sendable {
     completionTokens: Int? = nil,
     stopReason: String? = nil,
     passed: Bool? = nil,
-    label: String? = nil)
+    label: String? = nil,
+    judgeModel: String? = nil,
+    jevScore: Double? = nil,
+    jevPassed: Bool? = nil,
+    jevUnknown: Bool? = nil,
+    jevNotes: String? = nil,
+    jevRepeats: Int? = nil,
+    jevVariance: Double? = nil,
+    jevQuestions: [JevQuestionRecord]? = nil,
+    secondJudgeModel: String? = nil,
+    secondRubricScore: Double? = nil,
+    secondRubricPassed: Bool? = nil,
+    secondRubricUnknown: Bool? = nil)
   {
     self.suite = suite
     self.taskId = taskId
@@ -323,6 +458,18 @@ public struct EvalOutcome: Codable, Sendable {
     self.stopReason = stopReason
     self.passed = passed
     self.label = label
+    self.judgeModel = judgeModel
+    self.jevScore = jevScore
+    self.jevPassed = jevPassed
+    self.jevUnknown = jevUnknown
+    self.jevNotes = jevNotes
+    self.jevRepeats = jevRepeats
+    self.jevVariance = jevVariance
+    self.jevQuestions = jevQuestions
+    self.secondJudgeModel = secondJudgeModel
+    self.secondRubricScore = secondRubricScore
+    self.secondRubricPassed = secondRubricPassed
+    self.secondRubricUnknown = secondRubricUnknown
   }
 
   /// The graded verdict for a trial whose task is known: the check, narrowed by the rubric
@@ -337,7 +484,23 @@ public struct EvalOutcome: Codable, Sendable {
     limitsPassed: Bool?)
     -> Bool?
   {
-    guard task.rubric != nil || task.limits != nil else { return nil }
+    gradedVerdict(
+      task: task, checkPassed: checkPassed, rubricPassed: rubricPassed,
+      limitsPassed: limitsPassed, jevPassed: nil)
+  }
+
+  /// The full fold: the check, narrowed by every gating grader — the rubric and the jev
+  /// verdict fail a gated task when unknown or missing (never a pass by default), the limits
+  /// pass one (a run with no record is not a violation).
+  public static func gradedVerdict(
+    task: EvalTask,
+    checkPassed: Bool,
+    rubricPassed: Bool?,
+    limitsPassed: Bool?,
+    jevPassed: Bool?)
+    -> Bool?
+  {
+    guard task.rubric != nil || task.limits != nil || task.jev != nil else { return nil }
     var verdict = checkPassed
     if let rubric = task.rubric, rubric.gates {
       verdict = verdict && (rubricPassed ?? false)
@@ -345,7 +508,38 @@ public struct EvalOutcome: Codable, Sendable {
     if let limits = task.limits, limits.gates {
       verdict = verdict && (limitsPassed ?? true)
     }
+    if let jev = task.jev, jev.gates {
+      verdict = verdict && (jevPassed ?? false)
+    }
     return verdict
+  }
+}
+
+/// One jev question's fold on the row: the mean answer across repeats, its variance, the
+/// expectation's verdict (nil when the question declared none), and the picked choice.
+public struct JevQuestionRecord: Codable, Sendable, Equatable {
+  public var name: String
+  /// `noul` | `choice` | `score` — kept a plain string so old rows never hinge on an enum.
+  public var kind: String
+  public var mean: Double
+  public var variance: Double?
+  public var passed: Bool?
+  public var choice: String?
+
+  public init(
+    name: String,
+    kind: String,
+    mean: Double,
+    variance: Double? = nil,
+    passed: Bool? = nil,
+    choice: String? = nil)
+  {
+    self.name = name
+    self.kind = kind
+    self.mean = mean
+    self.variance = variance
+    self.passed = passed
+    self.choice = choice
   }
 }
 
@@ -529,6 +723,17 @@ public final class EvalRunner: @unchecked Sendable {
   private let judgeModel: String?
   /// The loop-1 verifier for tasks that say `verify: true`; nil = the flag grades nothing.
   private let verifierModel: String?
+  /// A second judge for rubric tasks (`--second-judge`): the same evidence graded twice, the
+  /// second verdict recorded on the row for alignment (`arnes evals judges`), never gating.
+  /// nil = every rubric task is judged once.
+  private let secondJudgeModel: String?
+  /// How many times a decisions judge (jev) is asked per trial (1…9, `--judge-repeats`);
+  /// a task's own `jev.repeats` wins. An LLM rubric judge always runs once.
+  private let judgeRepeats: Int
+  /// The decisions judge for tasks whose `jev` block names no model when `judgeModel` doesn't
+  /// resolve to one either — the CLI passes its decide default; nil = such a task's jev
+  /// verdict is unknown. ArnesKit hardcodes no slug (invariant 1).
+  private let decisionJudge: String?
   /// The reasoning dial every trial's session runs with (X5, `arnes eval --effort`); nil leaves
   /// requests exactly as they are. Applied by the session only to models whose manifest says
   /// they support reasoning, like any other run's dial.
@@ -577,6 +782,9 @@ public final class EvalRunner: @unchecked Sendable {
     transcriptStore: SessionStore? = nil,
     judgeModel: String? = nil,
     verifierModel: String? = nil,
+    secondJudgeModel: String? = nil,
+    judgeRepeats: Int = 1,
+    decisionJudge: String? = nil,
     reasoningEffort: Reasoning.Effort? = nil,
     budgetUSD: Double? = nil,
     toolResultGuard: ToolResultGuardPolicy = .default,
@@ -593,6 +801,9 @@ public final class EvalRunner: @unchecked Sendable {
     self.transcriptStore = transcriptStore
     self.judgeModel = judgeModel
     self.verifierModel = verifierModel
+    self.secondJudgeModel = secondJudgeModel
+    self.judgeRepeats = min(9, max(1, judgeRepeats))
+    self.decisionJudge = decisionJudge
     self.reasoningEffort = reasoningEffort
     self.budgetUSD = budgetUSD
     self.service = service
@@ -746,7 +957,7 @@ public final class EvalRunner: @unchecked Sendable {
     // check. Only when the task has a rubric or is verified — an ungraded trial copies nothing
     // and stays byte-identical.
     var baseDirectory: URL?
-    if task.rubric != nil || (task.verify == true && verifierModel != nil) {
+    if task.rubric != nil || task.jev != nil || (task.verify == true && verifierModel != nil) {
       // A sibling whose path is not prefixed by the workdir's: `WorkspaceSnapshot.diff` rewrites
       // the candidate path first, so `<workdir>-base/x` would read `candidate-base/x` to the judge.
       let base = workdir.deletingLastPathComponent()
@@ -862,6 +1073,12 @@ public final class EvalRunner: @unchecked Sendable {
       outcome.durationSeconds = Date().timeIntervalSince(startedAt)
       return outcome
     }
+    // A jev block that cannot be judged is a task error on the same grounds.
+    if let jev = task.jev, let problem = Self.jevProblem(jev) {
+      outcome.error = "jev: \(problem)"
+      outcome.durationSeconds = Date().timeIntervalSince(startedAt)
+      return outcome
+    }
     let agent = Agent(
       service: service,
       tools: tools,
@@ -961,19 +1178,82 @@ public final class EvalRunner: @unchecked Sendable {
     let reportOrWhy = report.isEmpty
       ? "(no report — \(outcome.error ?? "the agent gave no final reply"))"
       : report
-    if task.rubric != nil, let diff = snapshotDiff {
-      let judge = resolvedJudge(for: task, candidate: model)
+    if task.rubric != nil || task.jev != nil, let diff = snapshotDiff {
       let evidence = RubricJudge.Evidence(
         report: reportOrWhy,
         diff: diff,
         checkPassed: outcome.checkPassed,
         checkOutput: check.output)
-      let graded = await grade(task: task, evidence: evidence, judge: judge, catalog: catalog)
-      outcome.rubricScore = graded.score
-      outcome.rubricPassed = graded.passed
-      outcome.rubricUnknown = graded.unknown
-      outcome.rubricNotes = String(graded.notes.prefix(RubricJudge.maxNotesChars))
-      outcome.graderCostUSD = graded.costUSD
+      if let rubric = task.rubric {
+        let judge = resolvedJudge(for: task, candidate: model)
+        outcome.judgeModel = judge
+        // The bridge: a judge the manifest positively marks as a decisions model grades the
+        // same criteria as noul questions over the same evidence — the verdict lands in the
+        // rubric fields unchanged, the per-question fold in the jev audit fields. A judge the
+        // manifest doesn't know stays on the chat path exactly as before.
+        if let profile = try? await catalog.profile(for: judge), profile.isDecisionModel {
+          let (graded, detail) = await JevJudge.gradeBridge(
+            criteria: rubric.criteria, threshold: rubric.effectiveThreshold, task: task,
+            evidence: evidence, model: judge, repeats: judgeRepeats, service: service)
+          outcome.rubricScore = graded.score
+          outcome.rubricPassed = graded.passed
+          outcome.rubricUnknown = graded.unknown
+          outcome.rubricNotes = String(graded.notes.prefix(RubricJudge.maxNotesChars))
+          outcome.graderCostUSD = graded.costUSD
+          if detail.repeats > 1 {
+            outcome.jevRepeats = detail.repeats
+            outcome.jevVariance = detail.scoreVariance
+          }
+          if !detail.questions.isEmpty {
+            outcome.jevQuestions = detail.questionRecords
+          }
+        } else {
+          let graded = await grade(task: task, evidence: evidence, judge: judge, catalog: catalog)
+          outcome.rubricScore = graded.score
+          outcome.rubricPassed = graded.passed
+          outcome.rubricUnknown = graded.unknown
+          outcome.rubricNotes = String(graded.notes.prefix(RubricJudge.maxNotesChars))
+          outcome.graderCostUSD = graded.costUSD
+        }
+      }
+      if let jev = task.jev {
+        let (result, judge) = await jevGrade(jev: jev, task: task, evidence: evidence, catalog: catalog)
+        if outcome.judgeModel == nil { outcome.judgeModel = judge }
+        outcome.jevScore = result.score
+        outcome.jevPassed = result.passed
+        outcome.jevUnknown = result.unknown
+        if !result.notes.isEmpty {
+          outcome.jevNotes = String(result.notes.prefix(RubricJudge.maxNotesChars))
+        }
+        if result.repeats > 1 {
+          outcome.jevRepeats = result.repeats
+          outcome.jevVariance = result.scoreVariance
+        }
+        if !result.questions.isEmpty {
+          outcome.jevQuestions = result.questionRecords
+        }
+        outcome.graderCostUSD = (outcome.graderCostUSD ?? 0) + result.costUSD
+      }
+      // The second judge (`--second-judge`): the same evidence graded again by another model,
+      // routed by *its* profile — decisions → the bridge fold, chat → the rubric judge. Its
+      // verdict is recorded for alignment (`arnes evals judges`), never gating; its spend
+      // lands beside the primary's.
+      if let second = secondJudgeModel, let rubric = task.rubric {
+        let judge = resolvedAlias(second)
+        outcome.secondJudgeModel = judge
+        let graded: RubricResult
+        if let profile = try? await catalog.profile(for: judge), profile.isDecisionModel {
+          (graded, _) = await JevJudge.gradeBridge(
+            criteria: rubric.criteria, threshold: rubric.effectiveThreshold, task: task,
+            evidence: evidence, model: judge, repeats: judgeRepeats, service: service)
+        } else {
+          graded = await grade(task: task, evidence: evidence, judge: judge, catalog: catalog)
+        }
+        outcome.secondRubricScore = graded.score
+        outcome.secondRubricPassed = graded.passed
+        outcome.secondRubricUnknown = graded.unknown
+        outcome.graderCostUSD = (outcome.graderCostUSD ?? 0) + graded.costUSD
+      }
     }
     // The loop-1 verifier (V1), over the same diff: its verdict lands on the row, its spend on
     // `graderCostUSD` beside the judge's — apart from `costUSD`, so model comparisons stay
@@ -989,9 +1269,40 @@ public final class EvalRunner: @unchecked Sendable {
       task: task,
       checkPassed: outcome.checkPassed,
       rubricPassed: outcome.rubricPassed,
-      limitsPassed: outcome.limitsPassed)
+      limitsPassed: outcome.limitsPassed,
+      jevPassed: outcome.jevPassed)
     outcome.durationSeconds = Date().timeIntervalSince(startedAt)
     return outcome
+  }
+
+  /// Runs the decisions judge over a task's `jev` block. The ladder: the block's own model,
+  /// then the runner's `--judge` when the manifest marks it as a decisions model, then the
+  /// runner's decisions default. The block is the opt-in, so no profile gate beyond that —
+  /// a model the decisions endpoint refuses lands in the same `unknown` a down judge does,
+  /// never a thrown trial.
+  private func jevGrade(
+    jev: EvalTask.Jev,
+    task: EvalTask,
+    evidence: RubricJudge.Evidence,
+    catalog: ModelCatalog)
+    async -> (result: JevResult, judge: String?)
+  {
+    var candidate = jev.model
+    if candidate == nil, let judgeModel,
+       let profile = try? await catalog.profile(for: resolvedAlias(judgeModel)),
+       profile.isDecisionModel
+    {
+      candidate = judgeModel
+    }
+    if candidate == nil { candidate = decisionJudge }
+    guard let candidate else {
+      return (.unknown(notes: "no decisions judge (set jev.model or pass --judge <decisions model>)"), nil)
+    }
+    let judge = resolvedAlias(candidate)
+    let repeats = min(9, max(1, jev.repeats ?? judgeRepeats))
+    let result = await JevJudge.grade(
+      jev: jev, task: task, evidence: evidence, model: judge, repeats: repeats, service: service)
+    return (result, judge)
   }
 
   /// The judge model a rubric task is graded on: the task's own `model`, else the runner's
@@ -1068,6 +1379,57 @@ public final class EvalRunner: @unchecked Sendable {
       return "no criteria"
     }
     let threshold = rubric.effectiveThreshold
+    if !(0...1).contains(threshold) || threshold.isNaN {
+      return "threshold \(threshold) is not between 0 and 1"
+    }
+    return nil
+  }
+
+  /// Why a task's jev block cannot be judged — caught before the agent runs, like
+  /// `rubricProblem`: it would otherwise cost `repeats` decisions requests per trial and
+  /// decide `passed` vacuously.
+  static func jevProblem(_ jev: EvalTask.Jev) -> String? {
+    if jev.questions.isEmpty { return "no questions" }
+    if jev.gates, jev.questions.allSatisfy({ $0.value.expect == nil }) {
+      return "gating with no expectations (add expect, or gate: false to record only)"
+    }
+    for (name, question) in jev.questions.sorted(by: { $0.key < $1.key }) {
+      if question.instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        return "question '\(name)' has no instructions"
+      }
+      switch question.type {
+      case .score:
+        guard case .levels(let levels)? = question.criteria, (2...10).contains(levels.count) else {
+          return "question '\(name)' needs 2–10 ordered score levels"
+        }
+      case .choice:
+        guard case .labeled(let options)? = question.criteria, options.count >= 2 else {
+          return "question '\(name)' needs at least 2 labeled options"
+        }
+        if let expected = question.expect?.choice, options[expected] == nil {
+          return "question '\(name)' expects '\(expected)', not one of its options"
+        }
+      case .noul:
+        break
+      }
+      if let expect = question.expect {
+        if question.type != .score {
+          for bound in [expect.min, expect.max].compactMap({ $0 }) where !(0...1).contains(bound) || bound.isNaN {
+            return "question '\(name)' bound \(bound) is not between 0 and 1"
+          }
+        }
+        if let low = expect.min, let high = expect.max, low > high {
+          return "question '\(name)' min \(low) is above max \(high)"
+        }
+        if question.type != .choice, expect.choice != nil {
+          return "question '\(name)' expects a choice but is not a choice question"
+        }
+      }
+    }
+    if let repeats = jev.repeats, !(1...9).contains(repeats) {
+      return "repeats \(repeats) is not between 1 and 9"
+    }
+    let threshold = jev.effectiveThreshold
     if !(0...1).contains(threshold) || threshold.isNaN {
       return "threshold \(threshold) is not between 0 and 1"
     }
