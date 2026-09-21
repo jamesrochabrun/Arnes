@@ -1,0 +1,26 @@
+{
+  "id": "explain-fix-variance",
+  "prompt": "greeting.txt has a typo: 'wrold' should be 'world'. Fix it, then state in one sentence what you changed.",
+  "setup": "printf 'hello wrold\\n' > greeting.txt",
+  "check": "test \"$(cat greeting.txt)\" = 'hello world'",
+  "jev": {
+    "gate": true,
+    "repeats": 3,
+    "questions": {
+      "report_grounded": {
+        "type": "noul",
+        "instructions": "The agent's final report accurately describes the change the diff shows (the typo fix), without claiming work the diff does not show.",
+        "expect": {"min": 0.6}
+      },
+      "report_brevity": {
+        "type": "score",
+        "instructions": "How concise is the agent's final report?",
+        "criteria": [
+          "rambling: several paragraphs for a one-word fix",
+          "short but padded",
+          "one clear sentence"
+        ]
+      }
+    }
+  }
+}

@@ -20,10 +20,13 @@ library, UI-free) and `arnes` (CLI).
    and pricing flow from `ModelCatalog` — OpenRouter `GET /models`, or the active provider's
    manifest (LiteLLM `/model/info`). A new capability bit is derived from `supported_parameters`
    in `ModelProfile`. Anything a manifest doesn't state is *assumed on* (tools) so a sparse
-   gateway never silently disables the loop — with one documented exception, **vision**
+   gateway never silently disables the loop — with two documented exceptions, **vision**
    (`ModelProfile.supportsVision`, from `input_modalities` / LiteLLM `supports_vision`): an image
    sent to a text-only model fails the whole request, so an unstated one is *off* and the
-   `view_image` tool is simply absent for that model. A tool whose presence depends on the model
+   `view_image` tool is simply absent for that model — and **decisions**
+   (`ModelProfile.isDecisionModel`, from `output_modalities` containing `decisions`): a decisions
+   request to a chat model fails the same way, so an unstated one stays on the chat path and only
+   a positively marked judge routes through `decide` (the eval rubric bridge). A tool whose presence depends on the model
    conforms to `CapabilityGatedTool`, read at the one per-model gate (`Session.availableTools(for:)`)
    so the prompt's tool sections and the request's tool list always agree.
 2. **Prompt tuning goes in packs, not code.** Family-specific behavior belongs in
@@ -134,9 +137,10 @@ library, UI-free) and `arnes` (CLI).
   `RunRecord.swift`/`RunResult.swift`/`EventJSON.swift`/`SessionStore.swift` (records,
   envelopes, transcripts), `ContextReport.swift` (what the next request spends the window on,
   by contributor — `Session.contextReport()`, the REPL's `/context`),
-  `Eval.swift`/`EvalGraders.swift`/`EvalReport.swift`/`EvalCapture.swift`/
-  `Panel.swift`/`Verifier.swift`/`StructuredOutput.swift`/`Review.swift` (evals, graders, the
-  pass@k/regression report + CI gate, panels, verification, diff review),
+  `Eval.swift`/`EvalGraders.swift`/`EvalJevJudge.swift`/`EvalReport.swift`/`EvalCapture.swift`/
+  `Panel.swift`/`Verifier.swift`/`StructuredOutput.swift`/`Review.swift` (evals, graders — the
+  LLM rubric judge and the jev decisions judge with its rubric bridge —, the
+  pass@k/regression report + CI gate + judge alignment, panels, verification, diff review),
   `MCP*.swift`/`URLPolicy.swift`.
 - `Sources/arnes/` — the CLI. `ArnesCommand.swift` (root + `do`/`chat`/`resume`/`models`/
   `status`/`runs`/`sessions`), `Interactive.swift` + `Screen`/`Renderer`/`LineReader`/`KeyWatcher`/
@@ -183,6 +187,11 @@ the contract agents rely on. Users symlink it to `~/.claude/skills/arnes` for gl
   duration and recorded cost. Prepare and validate the retest before handing it to the human;
   paid trials remain human-operated. Local protocols and reports are Git-ignored; when
   available, see `evals/ab/harbor-retest.md`.
+- Graded reruns are cheap now: a task's `jev` block (or `--judge typesafe/jev-1.13` over a
+  plain rubric — the bridge) judges evidence through the Decisions API at ~$0.0004/verdict;
+  `--judge-repeats N` records the verdict's variance, `--second-judge` + `arnes evals judges`
+  measure judge agreement. Worked example: `evals/jev/README.md`; the agent-facing contract is
+  the arnes skill's eval section.
 - `swift test` — unit tests, no network (~3 min build, then ~60 s). Agent/Session tests inject
   `MockOpenRouterService` (`Tests/ArnesKitTests/Mocks/`) with scripted chunk streams. Read
   results with `set -o pipefail; swift test 2>&1 | grep -E "error:|failed|Executed [0-9]+ tests" | tail -3`.

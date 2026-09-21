@@ -29,7 +29,11 @@ final class EvalGradersCLITests: XCTestCase {
     task: String = "t", check: Bool = true, session: String? = nil, run: String? = nil,
     rubricScore: Double? = nil, rubricPassed: Bool? = nil, rubricUnknown: Bool? = nil,
     limitsPassed: Bool? = nil, violations: [String]? = nil, verifierPassed: Bool? = nil,
-    passed: Bool? = nil, error: String? = nil, dialect: String? = "chat")
+    passed: Bool? = nil, error: String? = nil, dialect: String? = "chat",
+    judgeModel: String? = nil, jevScore: Double? = nil, jevPassed: Bool? = nil,
+    jevUnknown: Bool? = nil, jevRepeats: Int? = nil, jevVariance: Double? = nil,
+    secondJudgeModel: String? = nil, secondRubricScore: Double? = nil,
+    secondRubricPassed: Bool? = nil, secondRubricUnknown: Bool? = nil)
     -> EvalOutcome
   {
     EvalOutcome(
@@ -38,7 +42,11 @@ final class EvalGradersCLITests: XCTestCase {
       startedAt: Date(), routedModels: [], error: error, dialect: dialect, sandboxed: true,
       rubricScore: rubricScore, rubricPassed: rubricPassed, rubricUnknown: rubricUnknown,
       limitsPassed: limitsPassed, limitsViolations: violations, verifierPassed: verifierPassed,
-      sessionId: session, runId: run, passed: passed)
+      sessionId: session, runId: run, passed: passed,
+      judgeModel: judgeModel, jevScore: jevScore, jevPassed: jevPassed, jevUnknown: jevUnknown,
+      jevRepeats: jevRepeats, jevVariance: jevVariance,
+      secondJudgeModel: secondJudgeModel, secondRubricScore: secondRubricScore,
+      secondRubricPassed: secondRubricPassed, secondRubricUnknown: secondRubricUnknown)
   }
 
   // MARK: Flags
@@ -55,6 +63,20 @@ final class EvalGradersCLITests: XCTestCase {
     XCTAssertEqual(graded.verify, "verifier/v")
     XCTAssertTrue(graded.noTranscripts)
     XCTAssertEqual(graded.models, ["test/model"])
+  }
+
+  func testJevAndSecondJudgeFlagsParse() throws {
+    let plain = try Eval.parse(["evals/basics"])
+    XCTAssertEqual(plain.judgeRepeats, 1)
+    XCTAssertNil(plain.secondJudge)
+    let dual = try Eval.parse([
+      "evals/jev", "-m", "test/model", "--judge-repeats", "3", "--second-judge", "typesafe/jev-1.13",
+    ])
+    XCTAssertEqual(dual.judgeRepeats, 3)
+    XCTAssertEqual(dual.secondJudge, "typesafe/jev-1.13")
+    // The repeats dial lives in 1…9 — anything else is a usage error.
+    XCTAssertThrowsError(try Eval.parse(["evals/jev", "--judge-repeats", "0"]))
+    XCTAssertThrowsError(try Eval.parse(["evals/jev", "--judge-repeats", "10"]))
   }
 
   func testEvalsTranscriptParses() throws {
@@ -128,6 +150,86 @@ final class EvalGradersCLITests: XCTestCase {
     let verifyAt = try! XCTUnwrap(everything.range(of: "verify")).lowerBound
     let errorAt = try! XCTUnwrap(everything.range(of: "late")).lowerBound
     XCTAssertTrue(rubricAt < limitsAt && limitsAt < verifyAt && verifyAt < errorAt, everything)
+  }
+
+  func testProgressLineAppendsJevAndSecondJudgeFacts() {
+    let jevPass = outcome(passed: true, jevScore: 1, jevPassed: true, jevUnknown: false)
+    XCTAssertTrue(Eval.progressLine(jevPass).contains(" · jev 1.00 \(ANSI.green("✓"))"))
+
+    let repeated = Eval.progressLine(outcome(
+      passed: false, jevScore: 0.5, jevPassed: false, jevUnknown: false, jevRepeats: 3, jevVariance: 0.0004))
+    XCTAssertTrue(repeated.contains(" · jev 0.50 \(ANSI.red("✗")) (σ² 0.0004, n=3)"), repeated)
+
+    let unknown = Eval.progressLine(outcome(passed: false, jevScore: 0, jevPassed: false, jevUnknown: true))
+    XCTAssertTrue(unknown.contains(" · jev \(ANSI.red("✗")) (unknown)"), unknown)
+
+    XCTAssertTrue(Eval.progressLine(outcome(secondRubricPassed: true))
+      .contains(" · judge² \(ANSI.green("✓"))"))
+    let secondUnknown = Eval.progressLine(outcome(secondRubricPassed: false, secondRubricUnknown: true))
+    XCTAssertTrue(secondUnknown.contains(" · judge² \(ANSI.red("✗")) (unknown)"), secondUnknown)
+  }
+
+  // MARK: Grader cost line and jev stats line
+
+  func testGraderCostLineNamesJevOnlyWhenADecisionsJudgeGraded() {
+    XCTAssertNil(Eval.graderCostLine([outcome()]), "no grader spend: no line")
+    var rubricOnly = outcome(rubricScore: 1, rubricPassed: true)
+    rubricOnly.graderCostUSD = 0.004
+    XCTAssertEqual(Eval.graderCostLine([rubricOnly]), "grader cost $0.0040 (rubric)")
+    var jevGraded = outcome(jevScore: 1, jevPassed: true)
+    jevGraded.graderCostUSD = 0.0001
+    XCTAssertEqual(Eval.graderCostLine([rubricOnly, jevGraded]), "grader cost $0.0041 (rubric + jev)")
+  }
+
+  func testJevLinesAppearOnlyForJevGradedSummaries() {
+    XCTAssertTrue(Eval.jevLines(
+      for: "test/model", summaries: EvalReport.summaries([outcome()])).isEmpty)
+    let graded = EvalReport.summaries([
+      outcome(jevScore: 1, jevPassed: true, jevRepeats: 3, jevVariance: 0.0004),
+      outcome(task: "t2", jevScore: 0.5, jevPassed: false, jevRepeats: 3, jevVariance: 0.0002),
+    ])
+    XCTAssertEqual(Eval.jevLines(for: "test/model", summaries: graded), ["  jev 2 graded · σ² 0.0003"])
+    // Without repeats there is no variance term.
+    let single = EvalReport.summaries([outcome(jevScore: 1, jevPassed: true)])
+    XCTAssertEqual(Eval.jevLines(for: "test/model", summaries: single), ["  jev 1 graded"])
+  }
+
+  // MARK: Judge alignment
+
+  func testAlignmentLinesSummarizeAgreementAndNameDisagreements() {
+    let agree = outcome(
+      task: "a", rubricScore: 1, rubricPassed: true, rubricUnknown: false, passed: true,
+      judgeModel: "judge/llm", secondJudgeModel: "typesafe/jev-1.13",
+      secondRubricScore: 1, secondRubricPassed: true, secondRubricUnknown: false)
+    let disagree = outcome(
+      task: "b", rubricScore: 0.67, rubricPassed: true, rubricUnknown: false, passed: true,
+      judgeModel: "judge/llm", secondJudgeModel: "typesafe/jev-1.13",
+      secondRubricScore: 0.33, secondRubricPassed: false, secondRubricUnknown: false)
+    let lines = Eval.alignmentLines([agree, disagree])
+    XCTAssertEqual(lines[0], "judge alignment (judge/llm vs typesafe/jev-1.13):")
+    XCTAssertEqual(lines[1], "  2 trials · both decided 2 · agree 1 (50%) · mean |Δscore| 0.17 · unknowns 0/0")
+    XCTAssertEqual(lines[2], "  disagreements:")
+    XCTAssertEqual(lines[3], "    b · trial 1: judge ✓ 0.67 · judge² ✗ 0.33")
+    XCTAssertTrue(Eval.alignmentLines([outcome()]).isEmpty, "no dual-judged rows: no block")
+
+    // The `evals judges` table renders the same facts per suite × pair.
+    let judged = EvalsJudges.lines(JudgeAlignment.compute([agree, disagree]))
+    XCTAssertEqual(judged[0], "unit · judge/llm vs typesafe/jev-1.13:")
+    XCTAssertEqual(judged[1], "  2 trials · both decided 2 · agree 1 (50%) · mean |Δscore| 0.17 · unknowns 0/0")
+  }
+
+  func testEvalsJudgesParsesAndItsDocumentIsStable() throws {
+    let viaParent = try Evals.parseAsRoot(["judges", "--suite", "graded", "--label", "arm"]) as? EvalsJudges
+    XCTAssertEqual(viaParent?.suite, "graded")
+    XCTAssertEqual(viaParent?.label, "arm")
+    let row = JudgeAlignmentRow(
+      suite: "unit", judge: "judge/llm", secondJudge: "typesafe/jev-1.13",
+      trials: 2, decided: 2, agreements: 1, meanAbsScoreDelta: 0.17,
+      primaryUnknowns: 0, secondUnknowns: 0, meanJevVariance: 0.0004)
+    let line = try JSONOut.line(EvalJudgesDocument(rows: [row]))
+    XCTAssertEqual(
+      line,
+      #"{"rows":[{"agreement_rate":0.5,"agreements":1,"decided":2,"judge":"judge/llm","mean_abs_score_delta":0.17,"mean_jev_variance":0.0004,"primary_unknowns":0,"second_judge":"typesafe/jev-1.13","second_unknowns":0,"suite":"unit","trials":2}],"type":"eval_judges"}"#)
   }
 
   // MARK: evals transcript

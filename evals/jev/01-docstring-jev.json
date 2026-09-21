@@ -1,0 +1,35 @@
+{
+  "id": "add-docstring-jev",
+  "prompt": "Add a docstring to the function area in shapes.py that states what it computes and what unit the result is in. Do not change the function's behavior.",
+  "setup": "printf 'def area(width, height):\\n    return width * height\\n\\nif __name__ == \"__main__\":\\n    print(area(3, 4))\\n' > shapes.py",
+  "check": "test \"$(python3 shapes.py)\" = 12 && python3 -c 'import shapes; assert shapes.area.__doc__, \"no docstring\"'",
+  "jev": {
+    "gate": true,
+    "questions": {
+      "docstring_correct": {
+        "type": "noul",
+        "instructions": "The docstring says the function computes the area of a rectangle (or of a width × height shape).",
+        "expect": {"min": 0.7}
+      },
+      "diff_discipline": {
+        "type": "choice",
+        "instructions": "What did the diff change beyond adding the docstring?",
+        "criteria": {
+          "nothing": "Only the docstring was added; no other line of shapes.py is edited and no other file is added",
+          "other": "Other lines or files changed too"
+        },
+        "expect": {"choice": "nothing"}
+      },
+      "quality": {
+        "type": "score",
+        "instructions": "How good is the docstring?",
+        "criteria": [
+          "missing or wrong",
+          "vague: says something about area but not the unit",
+          "states the computation and the unit of the result"
+        ],
+        "expect": {"min": 1.0}
+      }
+    }
+  }
+}

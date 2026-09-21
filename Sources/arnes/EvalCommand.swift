@@ -19,6 +19,13 @@ struct Eval: AsyncParsableCommand {
         "limits": {"maxSteps": 6, "maxToolCalls": 8, "maxCostUSD": 0.05,
                    "forbiddenTools": ["bash"], "requiredTools": ["edit_file"], "gate": false}
         "verify": true          (with --verify <model>)
+        "jev": {"questions": {"grounded": {"type": "noul", "instructions": "…",
+                 "expect": {"min": 0.7}}}, "repeats": 3, "gate": true, "threshold": 1.0}
+      A `jev` block asks a decisions model (jev) typed noul/choice/score questions about the
+      same evidence the rubric judge reads — calibrated probabilities, ~100× cheaper than an
+      LLM judge. `--judge <decisions model>` (e.g. typesafe/jev-1.13) also re-judges plain
+      rubric criteria through it (the bridge); --judge-repeats N measures the judge's own
+      variance, and --second-judge grades everything twice for `arnes evals judges`.
       Every trial's transcript is kept under ~/.arnes/eval-sessions/ (`arnes evals
       transcript <id>`) unless --no-transcripts.
       As a CI gate: --parallel N runs N trials at once, --min-pass 1.0 exits 2 when any
@@ -66,6 +73,12 @@ struct Eval: AsyncParsableCommand {
 
   @Option(help: "Model for tasks that declare a rubric (default: the provider's default model; a task's own rubric.model wins). Equal to the candidate = self-grading, warned.")
   var judge: String?
+
+  @Option(name: .customLong("judge-repeats"), help: "Ask a decisions judge (jev) this many times per trial (1–9; a task's own jev.repeats wins), recording the mean verdict plus the per-question and score variance. An LLM rubric judge always runs once.")
+  var judgeRepeats = 1
+
+  @Option(name: .customLong("second-judge"), help: "Re-grade every rubric task's evidence with this second judge (id or alias; a decisions model routes through the bridge). Recorded on the rows for alignment — never gating — and printed as a judge-alignment block; `arnes evals judges` reads the pairs back across history.")
+  var secondJudge: String?
 
   @Option(help: "Run the loop-1 verifier after each trial of a task with `verify: true` (nothing without the flag; the flag does nothing for a task without `verify: true`).")
   var verify: String?
@@ -117,6 +130,9 @@ struct Eval: AsyncParsableCommand {
     _ = try parseEffort(effort)
     if let budget, !(budget > 0) {
       throw ValidationError("--budget must be a positive number of USD.")
+    }
+    if !(1...9).contains(judgeRepeats) {
+      throw ValidationError("--judge-repeats must be between 1 and 9.")
     }
     if let label, !Self.isValidLabel(label) {
       throw ValidationError("--label must be 1–40 characters of letters, digits, '.', '_' or '-' (an A/B arm name such as control or no-think).")
@@ -269,8 +285,22 @@ struct Eval: AsyncParsableCommand {
         line += " · limits \(ANSI.red("✗"))" + (violations.isEmpty ? "" : " \(violations)")
       }
     }
+    if outcome.jevUnknown == true {
+      line += " · jev \(ANSI.red("✗")) (unknown)"
+    } else if let score = outcome.jevScore {
+      let mark = outcome.jevPassed == true ? ANSI.green("✓") : ANSI.red("✗")
+      line += String(format: " · jev %.2f ", score) + mark
+      if let repeats = outcome.jevRepeats, let variance = outcome.jevVariance {
+        line += String(format: " (σ² %.4f, n=%d)", variance, repeats)
+      }
+    }
     if let verifierPassed = outcome.verifierPassed {
       line += " · verify " + (verifierPassed ? ANSI.green("✓") : ANSI.red("✗"))
+    }
+    if let secondPassed = outcome.secondRubricPassed {
+      line += " · judge² " + (outcome.secondRubricUnknown == true
+        ? ANSI.red("✗") + " (unknown)"
+        : (secondPassed ? ANSI.green("✓") : ANSI.red("✗")))
     }
     if let error = outcome.error {
       line += ANSI.yellow(" · \(String(error.prefix(80)))")
@@ -390,6 +420,11 @@ struct Eval: AsyncParsableCommand {
       transcriptStore: noTranscripts ? nil : EvalSessions.store(),
       judgeModel: judgeModel,
       verifierModel: verifierModel,
+      secondJudgeModel: secondJudge.map { runtime.provider.resolveAlias($0) },
+      judgeRepeats: judgeRepeats,
+      // The decisions default for `jev` tasks whose block names no model when --judge isn't
+      // a decisions model either — the same default `arnes decide` sends.
+      decisionJudge: Decide.defaultModel,
       reasoningEffort: try parseEffort(effort),
       budgetUSD: budget,
       // The same tool-result guard a CLI session runs (redact/scan/taint, framing per
@@ -429,9 +464,17 @@ struct Eval: AsyncParsableCommand {
         collapsedModels: collapsedModels))
     } else {
       print("\n" + Self.renderStats(EvalStats.aggregate(outcomes), summaries: summaries, taskCount: loaded.tasks.count, trials: trials))
-      let graderCost = outcomes.reduce(0.0) { $0 + ($1.graderCostUSD ?? 0) }
-      if graderCost > 0 {
-        print(String(format: "grader cost $%.4f (rubric)", graderCost))
+      if let costLine = Self.graderCostLine(outcomes) {
+        print(costLine)
+      }
+      if secondJudge != nil {
+        let alignment = Self.alignmentLines(outcomes)
+        if !alignment.isEmpty {
+          print("")
+          for line in alignment {
+            print(TerminalText.sanitize(line))
+          }
+        }
       }
       if let comparison, let compareWindow {
         print("")
@@ -476,6 +519,7 @@ struct Eval: AsyncParsableCommand {
     for row in stats {
       lines.append(statsRow(row))
       lines.append(contentsOf: passAtKLines(for: row.model, summaries: summaries))
+      lines.append(contentsOf: jevLines(for: row.model, summaries: summaries))
     }
     return lines.joined(separator: "\n")
   }
@@ -509,6 +553,75 @@ struct Eval: AsyncParsableCommand {
       }
       return line
     }
+  }
+
+  /// `  jev 6 graded · σ² 0.0004` under a model's row — only when a decisions judge graded
+  /// any of its rows (a `jev` block or the bridge), so an unjudged table is byte-identical.
+  /// The variance term appears only when some row was judged more than once. One line per
+  /// dialect when the model ran under two, tagged like `passAtKLines`.
+  static func jevLines(for model: String, summaries: [EvalModelSummary]) -> [String] {
+    let mine = summaries.filter { $0.model == model }
+    return mine.compactMap { summary in
+      guard summary.jevGraded > 0 else { return nil }
+      var line = "  jev \(summary.jevGraded) graded"
+      if let variance = summary.avgJevVariance {
+        line += String(format: " · σ² %.4f", variance)
+      }
+      if mine.count > 1 {
+        line += " · \(summary.dialect ?? "–")"
+      }
+      return line
+    }
+  }
+
+  /// The closing grader-spend line, or nil when no grader spent anything: `(rubric)` as it
+  /// has always read, `(rubric + jev)` only when a decisions judge graded some row — so a
+  /// run without one prints byte-identically.
+  static func graderCostLine(_ outcomes: [EvalOutcome]) -> String? {
+    let cost = outcomes.reduce(0.0) { $0 + ($1.graderCostUSD ?? 0) }
+    guard cost > 0 else { return nil }
+    let jevGraded = outcomes.contains { $0.jevScore != nil || $0.jevQuestions != nil }
+    return String(format: "grader cost $%.4f (%@)", cost, jevGraded ? "rubric + jev" : "rubric")
+  }
+
+  /// The post-run judge-alignment block (`--second-judge`): one header per judge pair, the
+  /// agreement facts, then each disagreeing trial. Empty when no row carries both verdicts.
+  static func alignmentLines(_ outcomes: [EvalOutcome]) -> [String] {
+    let rows = JudgeAlignment.compute(outcomes)
+    guard !rows.isEmpty else { return [] }
+    var lines: [String] = []
+    for row in rows {
+      lines.append("judge alignment (\(row.judge) vs \(row.secondJudge)):")
+      var facts = "  \(row.trials) trials · both decided \(row.decided)"
+      if let rate = row.agreementRate {
+        facts += " · agree \(row.agreements) (\(Int((rate * 100).rounded()))%)"
+      }
+      if let delta = row.meanAbsScoreDelta {
+        facts += String(format: " · mean |Δscore| %.2f", delta)
+      }
+      facts += " · unknowns \(row.primaryUnknowns)/\(row.secondUnknowns)"
+      if let variance = row.meanJevVariance {
+        facts += String(format: " · jev σ² %.4f", variance)
+      }
+      lines.append(facts)
+      let disagreements = outcomes.filter {
+        $0.suite == row.suite && $0.judgeModel == row.judge && $0.secondJudgeModel == row.secondJudge
+          && $0.rubricUnknown != true && $0.secondRubricUnknown != true
+          && $0.rubricPassed != nil && $0.secondRubricPassed != nil
+          && $0.rubricPassed != $0.secondRubricPassed
+      }
+      if !disagreements.isEmpty {
+        lines.append("  disagreements:")
+        for outcome in disagreements {
+          let primary = (outcome.rubricPassed == true ? "✓" : "✗")
+            + (outcome.rubricScore.map { String(format: " %.2f", $0) } ?? "")
+          let second = (outcome.secondRubricPassed == true ? "✓" : "✗")
+            + (outcome.secondRubricScore.map { String(format: " %.2f", $0) } ?? "")
+          lines.append("    \(outcome.taskId) · trial \(outcome.trial): judge \(primary) · judge² \(second)")
+        }
+      }
+    }
+    return lines
   }
 
   /// The compare block: what the baseline was, then `regressions:` and `fixes:` with one

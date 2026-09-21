@@ -123,9 +123,15 @@ final class MockOpenRouterService: OpenRouterService, @unchecked Sendable {
   /// event of its script — an SSE error event relayed mid-stream, a connection lost inside the
   /// stream — before or after output depending on the script's length. nil = a normal finish.
   var messagesStreamTrailingErrors: [Error?] = []
+  /// Decisions replies, consumed in order by `decide` — the jev judge's script.
+  var decisionResponses: [DecisionResponse] = []
+  /// Errors a decide request throws *instead of* consuming a response, in order — one per
+  /// request, consumed first (how a test stages a gateway 404 or a down decisions endpoint).
+  var decisionErrors: [Error] = []
   private var recordedRequests: [ChatCompletionRequest] = []
   private var recordedMessagesRequests: [MessagesRequest] = []
   private var recordedResponsesRequests: [ResponsesRequest] = []
+  private var recordedDecisionRequests: [DecisionRequest] = []
 
   var requests: [ChatCompletionRequest] {
     lock.lock()
@@ -143,6 +149,12 @@ final class MockOpenRouterService: OpenRouterService, @unchecked Sendable {
     lock.lock()
     defer { lock.unlock() }
     return recordedResponsesRequests
+  }
+
+  var decisionRequests: [DecisionRequest] {
+    lock.lock()
+    defer { lock.unlock() }
+    return recordedDecisionRequests
   }
 
   func chatCompletion(_ request: ChatCompletionRequest) async throws -> ChatCompletionResponse {
@@ -227,6 +239,18 @@ final class MockOpenRouterService: OpenRouterService, @unchecked Sendable {
 
   func models(filter: ModelsFilter?) async throws -> [OpenRouterModel] {
     try JSONDecoder().decode([OpenRouterModel].self, from: Data(manifestJSON.utf8))
+  }
+
+  func decide(_ request: DecisionRequest) async throws -> DecisionResponse {
+    let staged: Result<DecisionResponse?, Error> = lock.withLock {
+      recordedDecisionRequests.append(request)
+      if !decisionErrors.isEmpty {
+        return .failure(decisionErrors.removeFirst())
+      }
+      return .success(decisionResponses.isEmpty ? nil : decisionResponses.removeFirst())
+    }
+    guard let response = try staged.get() else { throw MockError.scriptExhausted }
+    return response
   }
 }
 
@@ -362,6 +386,54 @@ enum Fixtures {
     chunk("""
       {"model":"\(model)","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":\(promptTokens),"completion_tokens":5,"cost":\(cost),"prompt_tokens_details":{"cached_tokens":\(cachedTokens)}}}
       """)
+  }
+
+  /// Decodes a decisions reply from raw wire JSON (`DecisionResponse` is Decodable-only).
+  static func decisionResponse(_ json: String) -> DecisionResponse {
+    try! JSONDecoder().decode(DecisionResponse.self, from: Data(json.utf8))
+  }
+
+  /// A live jev-1.13 response captured 2026-09-19, verbatim — the same fixture
+  /// `DecideCommandTests` decodes, kept in both targets so each pins the wire shape.
+  static let liveDecisionFixture = """
+    {"model": "typesafe/jev-1.13-20260917",
+     "answers": {
+       "is_urgent": {"type": "noul", "noul": 0.95},
+       "department": {"type": "choice", "choice": "billing",
+         "probabilities": {"technical": 0.13, "sales": 0, "billing": 0.87},
+         "confidence": 0.81},
+       "frustration": {"type": "score", "score": 1.03,
+         "legend": {"0": "Calm", "1": "Frustrated", "2": "Very angry"},
+         "probabilities": {"0": 0, "1": 0.97, "2": 0.03},
+         "confidence": 0.95}},
+     "usage": {"input_tokens": 427, "output_tokens": 73, "cost": 1.7934e-05},
+     "id": "gen-dec-1789861418-EyPx7n1GoXKOwem2hN6m",
+     "provider": "TypeSafe"}
+    """
+
+  /// A decisions reply of noul answers only: `{question name: P(yes)}`.
+  static func noulDecision(
+    values: [String: Double],
+    cost: Double = 0.00002,
+    model: String = "typesafe/jev-1.13-20260917")
+    -> DecisionResponse
+  {
+    let answers = values
+      .sorted { $0.key < $1.key }
+      .map { #""\#($0.key)":{"type":"noul","noul":\#($0.value)}"# }
+      .joined(separator: ",")
+    return decisionResponse("""
+      {"model":"\(model)","answers":{\(answers)},"usage":{"input_tokens":100,"output_tokens":10,"cost":\(cost)}}
+      """)
+  }
+
+  /// A manifest entry for a decisions model (jev): `architecture.output_modalities` names
+  /// `decisions` (what `ModelProfile.isDecisionModel` reads) and, faithfully to the live
+  /// manifest, `supported_parameters` is empty.
+  static func decisionsManifestModel(id: String, contextLength: Int = 6000) -> String {
+    """
+    {"id":"\(id)","context_length":\(contextLength),"architecture":{"modality":"text->decisions","input_modalities":["text"],"output_modalities":["decisions"]},"supported_parameters":[],"pricing":{"prompt":"0.0000004","completion":"0"}}
+    """
   }
 
   private static func encodeJSONString(_ text: String) -> String {
