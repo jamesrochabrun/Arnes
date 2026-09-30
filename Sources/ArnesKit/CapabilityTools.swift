@@ -126,11 +126,12 @@ public final class ViewImageTool: AgentTool, CapabilityGatedTool, AttachingTool,
     ])
     let key = Self.currentTaskKey()
     lock.withLock {
-      sweepPending(now: Date())
       var queue = pending[key] ?? []
       queue.append((attachment, Date()))
       if queue.count > Self.maxPendingPerTask { queue.removeFirst(queue.count - Self.maxPendingPerTask) }
       pending[key] = queue
+      // Include this insertion in the global bound before releasing the lock.
+      sweepPending(now: Date())
     }
     return Self.sentinel(path: path, bytes: data.count, dimensions: ImageSniff.dimensions(of: data, mediaType: mediaType))
   }
