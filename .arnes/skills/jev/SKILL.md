@@ -58,3 +58,8 @@ OpenRouter's Decisions API) generates **no text** — it answers typed questions
 - The user can also run decisions themselves: `/decide <questions|file.json> <state>` in
   the REPL, `arnes decide` headless. If they'll reuse a question set, offer to save it as
   a `.json` file for `/decide`.
+- Jev also grades evals: a task's `"jev"` block (same question grammar, plus
+  `expect`/`repeats`/`gate`) judges each trial's evidence, `arnes eval --judge
+  typesafe/jev-1.13` bridges plain rubric criteria through it, and `arnes evals judges`
+  compares it against an LLM judge — see `evals/jev/README.md` and the arnes skill's eval
+  section.

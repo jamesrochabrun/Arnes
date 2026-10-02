@@ -987,6 +987,10 @@ struct EvalModelRow: Encodable, Equatable {
   @Nullable var avgSteps: Double?
   @Nullable var avgSeconds: Double?
   let errors: Int
+  /// Rows a decisions judge (jev) graded — a `jev` block or the rubric bridge.
+  let jevGraded: Int
+  /// Mean per-repeat score variance over the rows judged more than once; null otherwise.
+  @Nullable var avgJevVariance: Double?
 
   init(_ summary: EvalModelSummary) {
     model = summary.model
@@ -1002,6 +1006,8 @@ struct EvalModelRow: Encodable, Equatable {
     avgSteps = JSONOut.finite(summary.avgSteps)
     avgSeconds = JSONOut.finite(summary.avgSeconds)
     errors = summary.errors
+    jevGraded = summary.jevGraded
+    avgJevVariance = JSONOut.finite(summary.avgJevVariance)
   }
 
   enum CodingKeys: String, CodingKey {
@@ -1013,6 +1019,8 @@ struct EvalModelRow: Encodable, Equatable {
     case graderCostUSD = "grader_cost_usd"
     case avgSteps = "avg_steps"
     case avgSeconds = "avg_seconds"
+    case jevGraded = "jev_graded"
+    case avgJevVariance = "avg_jev_variance"
   }
 }
 
@@ -1060,6 +1068,17 @@ struct EvalOutcomeRow: Encodable, Equatable {
   @Nullable var rubricPassed: Bool?
   @Nullable var limitsPassed: Bool?
   @Nullable var verifierPassed: Bool?
+  @Nullable var judgeModel: String?
+  @Nullable var jevScore: Double?
+  @Nullable var jevPassed: Bool?
+  @Nullable var jevUnknown: Bool?
+  @Nullable var jevRepeats: Int?
+  @Nullable var jevVariance: Double?
+  @Nullable var jevQuestions: [EvalJevQuestionRow]?
+  @Nullable var secondJudgeModel: String?
+  @Nullable var secondRubricScore: Double?
+  @Nullable var secondRubricPassed: Bool?
+  @Nullable var secondRubricUnknown: Bool?
   @Nullable var costUSD: Double?
   @Nullable var graderCostUSD: Double?
   let steps: Int
@@ -1086,6 +1105,17 @@ struct EvalOutcomeRow: Encodable, Equatable {
     rubricPassed = outcome.rubricPassed
     limitsPassed = outcome.limitsPassed
     verifierPassed = outcome.verifierPassed
+    judgeModel = outcome.judgeModel
+    jevScore = JSONOut.finite(outcome.jevScore)
+    jevPassed = outcome.jevPassed
+    jevUnknown = outcome.jevUnknown
+    jevRepeats = outcome.jevRepeats
+    jevVariance = JSONOut.finite(outcome.jevVariance)
+    jevQuestions = outcome.jevQuestions.map { $0.map(EvalJevQuestionRow.init) }
+    secondJudgeModel = outcome.secondJudgeModel
+    secondRubricScore = JSONOut.finite(outcome.secondRubricScore)
+    secondRubricPassed = outcome.secondRubricPassed
+    secondRubricUnknown = outcome.secondRubricUnknown
     costUSD = JSONOut.finite(outcome.costUSD)
     graderCostUSD = JSONOut.finite(outcome.graderCostUSD)
     steps = outcome.steps
@@ -1115,6 +1145,41 @@ struct EvalOutcomeRow: Encodable, Equatable {
     case runId = "run_id"
     case stopReason = "stop_reason"
     case startedAt = "started_at"
+    case judgeModel = "judge_model"
+    case jevScore = "jev_score"
+    case jevPassed = "jev_passed"
+    case jevUnknown = "jev_unknown"
+    case jevRepeats = "jev_repeats"
+    case jevVariance = "jev_variance"
+    case jevQuestions = "jev_questions"
+    case secondJudgeModel = "second_judge_model"
+    case secondRubricScore = "second_rubric_score"
+    case secondRubricPassed = "second_rubric_passed"
+    case secondRubricUnknown = "second_rubric_unknown"
+  }
+}
+
+/// One jev question's fold on an outcome row (`jev_questions`): the mean answer across
+/// repeats, its variance, the expectation's verdict, the picked choice.
+struct EvalJevQuestionRow: Encodable, Equatable {
+  let name: String
+  let kind: String
+  @Nullable var mean: Double?
+  @Nullable var variance: Double?
+  @Nullable var passed: Bool?
+  @Nullable var choice: String?
+
+  init(_ record: JevQuestionRecord) {
+    name = record.name
+    kind = record.kind
+    mean = JSONOut.finite(record.mean)
+    variance = JSONOut.finite(record.variance)
+    passed = record.passed
+    choice = record.choice
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case name, kind, mean, variance, passed, choice
   }
 }
 
@@ -1216,6 +1281,58 @@ struct EvalHistoryJSONRow: Encodable, Equatable {
 struct EvalsDocument: Encodable, Equatable {
   let type = "evals"
   let rows: [EvalHistoryJSONRow]
+}
+
+// MARK: - evals judges --json
+
+/// One suite × judge pair of dual-judged rows (`arnes evals judges --json`): the alignment
+/// facts as the text block prints them.
+struct EvalJudgeRow: Encodable, Equatable {
+  let suite: String
+  let judge: String
+  let secondJudge: String
+  let trials: Int
+  let decided: Int
+  let agreements: Int
+  @Nullable var agreementRate: Double?
+  @Nullable var meanAbsScoreDelta: Double?
+  let primaryUnknowns: Int
+  let secondUnknowns: Int
+  @Nullable var meanJevVariance: Double?
+
+  init(_ row: JudgeAlignmentRow) {
+    suite = row.suite
+    judge = row.judge
+    secondJudge = row.secondJudge
+    trials = row.trials
+    decided = row.decided
+    agreements = row.agreements
+    agreementRate = JSONOut.finite(row.agreementRate)
+    meanAbsScoreDelta = JSONOut.finite(row.meanAbsScoreDelta)
+    primaryUnknowns = row.primaryUnknowns
+    secondUnknowns = row.secondUnknowns
+    meanJevVariance = JSONOut.finite(row.meanJevVariance)
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case suite, judge, trials, decided, agreements
+    case secondJudge = "second_judge"
+    case agreementRate = "agreement_rate"
+    case meanAbsScoreDelta = "mean_abs_score_delta"
+    case primaryUnknowns = "primary_unknowns"
+    case secondUnknowns = "second_unknowns"
+    case meanJevVariance = "mean_jev_variance"
+  }
+}
+
+/// The one document `arnes evals judges --json` prints.
+struct EvalJudgesDocument: Encodable, Equatable {
+  let type = "eval_judges"
+  let rows: [EvalJudgeRow]
+
+  init(rows: [JudgeAlignmentRow]) {
+    self.rows = rows.map(EvalJudgeRow.init)
+  }
 }
 
 extension EvalsShow {

@@ -7,8 +7,70 @@ import Foundation
 struct Evals: AsyncParsableCommand {
   static let configuration = CommandConfiguration(
     abstract: "Inspect, capture, and prune the eval history (~/.arnes/evals.jsonl).",
-    subcommands: [EvalsShow.self, EvalsCapture.self, EvalsPrune.self, EvalsTranscript.self],
+    subcommands: [EvalsShow.self, EvalsCapture.self, EvalsPrune.self, EvalsTranscript.self, EvalsJudges.self],
     defaultSubcommand: EvalsShow.self)
+}
+
+// MARK: - evals judges
+
+struct EvalsJudges: AsyncParsableCommand {
+  static let configuration = CommandConfiguration(
+    commandName: "judges",
+    abstract: "Judge agreement over the eval history: rows graded by two judges in one run (`arnes eval --second-judge`), grouped by suite × judge pair.")
+
+  @Option(help: "Only this suite (e.g. graded).")
+  var suite: String?
+
+  @Option(help: "Only rows tagged with this A/B arm (`arnes eval --label <name>`; exact match).")
+  var label: String?
+
+  @Flag(help: "Print one JSON document ({type: eval_judges, rows: [{suite, judge, second_judge, trials, decided, agreements, agreement_rate, mean_abs_score_delta, primary_unknowns, second_unknowns, mean_jev_variance}]}) instead of the table.")
+  var json = false
+
+  func run() throws {
+    var outcomes = try EvalStore().all()
+    if let suite {
+      outcomes = outcomes.filter { $0.suite == suite }
+    }
+    if let label {
+      outcomes = outcomes.filter { $0.label == label }
+    }
+    let rows = JudgeAlignment.compute(outcomes)
+    if json {
+      // An empty history is `rows: []`, never the text notice — stdout is the one document.
+      try JSONOut.print(EvalJudgesDocument(rows: rows))
+      return
+    }
+    guard !rows.isEmpty else {
+      print("no dual-judged rows — `arnes eval <suite> --second-judge <model>` records a judge pair per trial")
+      return
+    }
+    for line in Self.lines(rows) {
+      print(TerminalText.sanitize(line))
+    }
+  }
+
+  /// One block per suite × judge pair — the facts line `arnes eval --second-judge` prints
+  /// after a run, over the whole history. Pure.
+  static func lines(_ rows: [JudgeAlignmentRow]) -> [String] {
+    var lines: [String] = []
+    for row in rows {
+      lines.append("\(row.suite) · \(row.judge) vs \(row.secondJudge):")
+      var facts = "  \(row.trials) trials · both decided \(row.decided)"
+      if let rate = row.agreementRate {
+        facts += " · agree \(row.agreements) (\(Int((rate * 100).rounded()))%)"
+      }
+      if let delta = row.meanAbsScoreDelta {
+        facts += String(format: " · mean |Δscore| %.2f", delta)
+      }
+      facts += " · unknowns \(row.primaryUnknowns)/\(row.secondUnknowns)"
+      if let variance = row.meanJevVariance {
+        facts += String(format: " · jev σ² %.4f", variance)
+      }
+      lines.append(facts)
+    }
+    return lines
+  }
 }
 
 // MARK: - evals transcript

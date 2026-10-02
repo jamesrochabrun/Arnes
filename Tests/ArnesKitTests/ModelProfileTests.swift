@@ -68,4 +68,49 @@ final class ModelProfileTests: XCTestCase {
       supportsVision: true)
     XCTAssertTrue(explicit.supportsVision)
   }
+
+  // MARK: isDecisionModel — the second assumed-off capability (like vision)
+
+  func testOutputModalitiesDecideDecisions() throws {
+    let jev = try openRouterModel(Fixtures.decisionsManifestModel(id: "typesafe/jev-1.13"))
+    XCTAssertTrue(ModelProfile(model: jev).isDecisionModel)
+    XCTAssertFalse(ModelProfile(model: jev).supportsVision)
+
+    let chat = try openRouterModel(Fixtures.manifestModel(id: "acme/chat"))
+    XCTAssertFalse(ModelProfile(model: chat).isDecisionModel, "no architecture block: chat")
+
+    let text = try openRouterModel(
+      #"{"id":"acme/t","architecture":{"input_modalities":["text"],"output_modalities":["text"]},"supported_parameters":["tools"]}"#)
+    XCTAssertFalse(ModelProfile(model: text).isDecisionModel)
+  }
+
+  func testLegacyModalityStringDecidesDecisionsWhenOutputModalitiesIsAbsent() throws {
+    let legacy = try openRouterModel(
+      #"{"id":"acme/legacy-jev","architecture":{"modality":"text->decisions"},"supported_parameters":[]}"#)
+    XCTAssertTrue(ModelProfile(model: legacy).isDecisionModel)
+    let legacyChat = try openRouterModel(
+      #"{"id":"acme/legacy-chat","architecture":{"modality":"text->text"},"supported_parameters":["tools"]}"#)
+    XCTAssertFalse(ModelProfile(model: legacyChat).isDecisionModel)
+    // A model that only *reads* decisions-shaped input is not a decisions model.
+    let inputOnly = try openRouterModel(
+      #"{"id":"acme/reader","architecture":{"modality":"decisions->text"},"supported_parameters":[]}"#)
+    XCTAssertFalse(ModelProfile(model: inputOnly).isDecisionModel)
+    // `output_modalities` wins over the legacy string when both are present.
+    let both = try openRouterModel(
+      #"{"id":"acme/both","architecture":{"modality":"text->decisions","output_modalities":["text"]},"supported_parameters":[]}"#)
+    XCTAssertFalse(ModelProfile(model: both).isDecisionModel)
+  }
+
+  func testUnknownModelAndCrossRouterDefaultsAreNotDecisions() {
+    XCTAssertFalse(ModelProfile(unknownModelId: "openrouter/auto").isDecisionModel)
+    let other = ModelProfile(
+      id: "gw/alias", contextLength: nil, supportsTools: true, supportsReasoning: false,
+      supportsStructuredOutputs: false, promptPricePerToken: nil, completionPricePerToken: nil)
+    XCTAssertFalse(other.isDecisionModel)
+    let explicit = ModelProfile(
+      id: "gw/jev", contextLength: nil, supportsTools: false, supportsReasoning: false,
+      supportsStructuredOutputs: false, promptPricePerToken: nil, completionPricePerToken: nil,
+      isDecisionModel: true)
+    XCTAssertTrue(explicit.isDecisionModel)
+  }
 }

@@ -101,6 +101,10 @@ arnes eval evals/basics -m <model> --trust-project                     # also ru
 arnes eval evals/subagents --subagents -m <model>                      # give trials the task tool (built-in + user-global subagents) — scores delegation
 arnes eval evals/graded -m <model> --judge <cheap model>              # rubric tasks graded by an independent judge (default: the provider's default model)
 arnes eval evals/graded -m <model> --verify <cheap model>             # run the loop-1 verifier on tasks that say "verify": true
+arnes eval evals/jev -m <model>                                        # tasks with a "jev" block: typed decisions (jev) grade the evidence (~$0.0004/judgment; defaults to typesafe/jev-1.13)
+arnes eval evals/graded -m <model> --judge typesafe/jev-1.13           # the bridge: a decisions judge grades plain rubric criteria as noul questions
+arnes eval evals/jev -m <model> --judge-repeats 3                      # judge each trial 3× (decisions judges only): mean verdict + per-question and score variance on the row
+arnes eval evals/graded -m <model> --judge <llm> --second-judge typesafe/jev-1.13   # grade everything twice, print a judge-alignment block; `arnes evals judges` reads pairs back across history
 arnes eval evals/basics -m <model> --no-transcripts                    # don't keep trial transcripts (kept under ~/.arnes/eval-sessions by default)
 arnes eval evals/basics -m <model> --parallel 4                        # 4 trials at once (each in its own workdir/session; a wall-clock knob)
 arnes eval evals/basics -m <model> --effort medium --budget 0.05       # a reasoning dial for every trial; a per-trial cost ceiling (tighter of it and limits.maxCostUSD)
@@ -131,7 +135,7 @@ arnes eval evals/basics -m deepseek -m haiku --compare last:3 --json          # 
   `null` in `--json` for a single trial per task.
 
 - A suite is a directory of JSON tasks (`{"id","prompt","setup"?,"check","timeoutSeconds"?,
-  "rubric"?,"limits"?,"verify"?}`); the bash `check` script's exit 0 is the ground truth.
+  "rubric"?,"limits"?,"verify"?,"jev"?}`); the bash `check` script's exit 0 is the ground truth.
   `evals/basics` in the Arnes repo is the starter suite; point at any other directory or
   single .json file.
 - Optional graders per task — a rubric **refines** a pass, it never replaces the check, and a
@@ -152,12 +156,35 @@ arnes eval evals/basics -m deepseek -m haiku --compare last:3 --json          # 
   workdir against its post-setup state (`base/` → `candidate/`, like the rubric judge) — never
   the transcript — and answers one structured verdict (`pass`, `confidence`, `reasons`,
   `unmet`); its spend is grader cost, apart from the agent's `costUSD`.
+  `"jev": {"questions": {"<name>": {"type": "noul|choice|score", "instructions": "…",
+  "criteria"?: {…}|[…], "expect"?: {"min"?, "max"?, "choice"?}}}, "model"?, "gate"?: true,
+  "repeats"?: 1–9, "threshold"?: 1.0}` — a **decisions model (jev)** answers typed questions
+  about the same evidence (calibrated probabilities, no text; the question grammar is
+  `arnes decide --questions`'s). `expect` turns an answer into pass/fail, **checked against
+  the mean across repeats**: noul — min/max bound P(yes); score — they bound the expected
+  level; choice — `choice` names the key that must win the modal pick, `min` its minimum
+  probability. A question without `expect` is recorded, never counted (a gating block needs
+  at least one expectation). `threshold` = the fraction of expected questions that must hold
+  (default all). Judge = `jev.model` > `--judge` (when it is a decisions model) >
+  `typesafe/jev-1.13`. **The bridge**: `--judge <decisions model>` on a plain rubric task
+  converts the criteria to noul questions (met ⇔ mean P(yes) ≥ 0.5) — same fields, same
+  gate, per-criterion means kept in `jevQuestions`. `--judge-repeats N` (1–9; `jev.repeats`
+  wins) re-asks a decisions judge and records `jevVariance` (per-repeat score variance — the
+  repeatability signal); an LLM judge always runs once. `--second-judge <model>` grades every
+  rubric task's evidence twice (second verdict recorded, never gating) and prints a
+  judge-alignment block; **`arnes evals judges [--suite] [--label] [--json]`** aggregates
+  agreement/Δscore/variance per suite × judge pair across the whole history. A decisions
+  request that fails (gateway 404 — the Decisions API is OpenRouter-only) is `jevUnknown`:
+  a gated fail with the note, never a crashed trial.
 - Output ends with a per-model table: pass rate, total cost, avg steps, avg time, errors
   (the pass count is the graded verdict where a task had graders, the check otherwise), then
-  `grader cost $x (rubric)` when a judge or the verifier ran (both spends are grader cost, kept
+  `grader cost $x (rubric)` — or `(rubric + jev)` when a decisions judge graded — when a judge
+  or the verifier ran (all three spends are grader cost, kept
   out of the per-model cost column). Per-trial lines append ` · rubric 0.83 ✓` /
-  ` · rubric ✗ (unknown)` / ` · limits ✗ steps 9 > 6` / ` · verify ✓` only for trials that had
-  those graders. Report that table to the user (and per-task ✗ lines for failures).
+  ` · rubric ✗ (unknown)` / ` · limits ✗ steps 9 > 6` / ` · jev 1.00 ✓ (σ² 0.0004, n=3)` /
+  ` · verify ✓` / ` · judge² ✓` only for trials that had
+  those graders; a jev-graded model's table row gains a `  jev N graded · σ² …` line. Report
+  that table to the user (and per-task ✗ lines for failures).
 - Dialect A/B: run the same suite twice, `--dialect chat` vs `--dialect messages` (Anthropic)
   or `--dialect responses` (OpenAI), and compare the two tables.
 - **Prompt / tool-default A/B (invariant 6)**: a pack sentence or a tool-presence default changes
@@ -185,7 +212,10 @@ arnes eval evals/basics -m deepseek -m haiku --compare last:3 --json          # 
   limitsViolations, verifierPassed, graderCostUSD — the judge's and the verifier's spend, kept
   apart from costUSD —, sessionId, runId, promptTokens,
   completionTokens, stopReason, passed — the graded verdict, absent on an ungraded row; `label`
-  — the `--label` arm, absent when none).
+  — the `--label` arm, absent when none; on a jev-graded row also judgeModel, jevScore,
+  jevPassed, jevUnknown, jevNotes, jevRepeats/jevVariance — only under repeats —, jevQuestions
+  — per-question mean/variance/verdict/choice —, and with `--second-judge` the
+  secondJudgeModel/secondRubric* fields).
 - **`--compare last:N`** (H1): the newest N rows per task · model · dialect, N ≥ 1 (`last` alone is
   5); the report's `compare` spells back what was passed (`"last:3"`). `last:0` / `last:x` are
   usage errors (exit 64). **`-m` repeats accumulate**: `-m a -m b` ≡ `-m a,b` (each flag split on
@@ -1481,6 +1511,11 @@ In the REPL the same call is `/decide <questions> <state>` (questions inline `{�
 brace-matched, so the state may contain braces — or a file path): the full answer prints in
 the terminal and the agent sees the identical render as a notice with the user's next
 message; it never runs a turn by itself.
+
+Jev is also an **eval grader**: a task's `"jev"` block asks the same typed questions about
+a trial's evidence, `--judge typesafe/jev-1.13` bridges plain rubric criteria through it,
+`--judge-repeats` measures its variance, and `arnes evals judges` compares it against an
+LLM judge — see the eval section above.
 
 `--json` prints one document: `{type: "decision", requested, model, provider, id,
 answers: {name: {type, noul?, choice?, score?, confidence?, probabilities?, legend?}},

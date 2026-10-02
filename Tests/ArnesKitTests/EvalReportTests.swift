@@ -202,4 +202,67 @@ final class EvalReportTests: XCTestCase {
     XCTAssertTrue(EvalGate(failOnRegression: true).passes(summaries: [], regressions: []))
     XCTAssertEqual(EvalGate.failedExitCode, 2)
   }
+
+  // MARK: Jev aggregates and judge alignment
+
+  private func dualJudged(
+    task: String, suite: String = "s", judge: String = "judge/llm", second: String = "typesafe/jev-1.13",
+    score: Double?, passed: Bool?, unknown: Bool? = false,
+    secondScore: Double?, secondPassed: Bool?, secondUnknown: Bool? = false,
+    jevVariance: Double? = nil)
+    -> EvalOutcome
+  {
+    var outcome = row(task: task, passed: true, suite: suite)
+    outcome.judgeModel = judge
+    outcome.rubricScore = score
+    outcome.rubricPassed = passed
+    outcome.rubricUnknown = unknown
+    outcome.secondJudgeModel = second
+    outcome.secondRubricScore = secondScore
+    outcome.secondRubricPassed = secondPassed
+    outcome.secondRubricUnknown = secondUnknown
+    outcome.jevVariance = jevVariance
+    return outcome
+  }
+
+  func testSummariesCarryJevAggregates() throws {
+    var jevRow = row(task: "a", passed: true)
+    jevRow.jevScore = 1
+    jevRow.jevVariance = 0.0004
+    var bridged = row(task: "b", passed: true)
+    bridged.jevQuestions = [JevQuestionRecord(name: "c1", kind: "noul", mean: 0.9)]
+    let plain = row(task: "c", passed: true)
+    let summary = try XCTUnwrap(EvalReport.summaries([jevRow, bridged, plain]).first)
+    XCTAssertEqual(summary.jevGraded, 2, "a jev block or the bridge counts; a plain row doesn't")
+    XCTAssertEqual(try XCTUnwrap(summary.avgJevVariance), 0.0004, accuracy: 1e-9)
+    let none = try XCTUnwrap(EvalReport.summaries([plain]).first)
+    XCTAssertEqual(none.jevGraded, 0)
+    XCTAssertNil(none.avgJevVariance)
+  }
+
+  func testJudgeAlignmentGroupsPairsAndCountsUnknownsApart() throws {
+    let rows = [
+      dualJudged(task: "a", score: 1, passed: true, secondScore: 1, secondPassed: true, jevVariance: 0.0002),
+      dualJudged(task: "b", score: 0.67, passed: true, secondScore: 0.33, secondPassed: false, jevVariance: 0.0006),
+      // An unknown on either side is counted apart and never enters the agreement rate.
+      dualJudged(task: "c", score: 0, passed: false, unknown: true, secondScore: 1, secondPassed: true),
+      // Another judge pair is its own group.
+      dualJudged(task: "a", judge: "other/llm", score: 1, passed: true, secondScore: 1, secondPassed: true),
+      // A row judged once never enters.
+      row(task: "d", passed: true),
+    ]
+    let alignment = JudgeAlignment.compute(rows)
+    XCTAssertEqual(alignment.count, 2)
+    let pair = try XCTUnwrap(alignment.first { $0.judge == "judge/llm" })
+    XCTAssertEqual(pair.trials, 3)
+    XCTAssertEqual(pair.decided, 2)
+    XCTAssertEqual(pair.agreements, 1)
+    XCTAssertEqual(try XCTUnwrap(pair.agreementRate), 0.5, accuracy: 1e-9)
+    XCTAssertEqual(try XCTUnwrap(pair.meanAbsScoreDelta), 0.17, accuracy: 1e-9)
+    XCTAssertEqual(pair.primaryUnknowns, 1)
+    XCTAssertEqual(pair.secondUnknowns, 0)
+    XCTAssertEqual(try XCTUnwrap(pair.meanJevVariance), 0.0004, accuracy: 1e-9)
+    XCTAssertEqual(alignment.map(\.judge), ["judge/llm", "other/llm"], "ordered by suite, judge, second")
+    XCTAssertTrue(JudgeAlignment.compute([row(task: "x", passed: true)]).isEmpty)
+  }
 }

@@ -14,7 +14,8 @@ models on repeatable tasks with recorded results and costs.
   screenshots on vision models, and resumable sessions with file checkpoints.
 - **Extend the agent:** skills, MCP servers, lifecycle hooks, and parallel or background subagents.
 - **Measure the work:** budgets, requested versus served models, prompt-cache usage,
-  evaluation suites, regression gates, and competing solutions judged from their diffs.
+  evaluation suites, regression gates, typed-decision (jev) judges at a fraction of an
+  LLM judge's cost, and competing solutions judged from their diffs.
 - **Control execution:** permission rules and scoped grants, plus OS containment on macOS.
 
 This README describes the **v0.7.0 source on `main`**. As of September 5, 2026, the latest
@@ -25,7 +26,8 @@ for the behavior documented here.
 
 [Quick start](#quick-start) · [Interactive commands](#interactive-mode) ·
 [Providers](#providers--gateways) · [Permissions](#permissions--trust) ·
-[MCP](#mcp-servers) · [Architecture](DESIGN.md) · [Contributing](#contributing)
+[MCP](#mcp-servers) · [Typed decisions](#typed-decisions-jev) ·
+[Architecture](DESIGN.md) · [Contributing](#contributing)
 
 ## Install
 
@@ -275,6 +277,14 @@ arnes eval evals/basics -m deepseek/deepseek-v4-flash --parallel 4 --min-pass 1.
   --compare last --fail-on-regression --json > report.json     # see .github/workflows/arnes-evals.yml
 arnes eval evals/basics -m deepseek -m haiku --compare last:3 --json   # -m repeats accumulate (≡ -m deepseek,haiku); last:N = the newest N rows per task
 
+# jev as the judge: typed decisions grade each trial's evidence (~$0.0004/judgment, no flags needed)
+arnes eval evals/jev -m deepseek/deepseek-v4-flash
+# ✓ add-docstring-jev · deepseek/deepseek-v4-flash · 4 steps · $0.0071 · 9.2s · jev 1.00 ✓
+arnes eval evals/graded -m <model> --judge typesafe/jev-1.13    # the bridge: existing rubric criteria re-judged as noul questions — no task changes
+arnes eval evals/jev -m <model> --judge-repeats 3               # judge each trial 3×: mean verdict + score variance (σ²) on every row
+arnes eval evals/graded -m <model> --judge anthropic/claude-haiku-4.5 --second-judge typesafe/jev-1.13   # LLM judge vs jev on the same evidence
+arnes evals judges                                              # agreement per suite × judge pair, across the whole history
+
 # an A/B arm (a pack sentence or a tool default changes only after one — evals/ab/README.md is the recipe):
 # tag the rows, run the other arm under a committed prompt variant, read each arm back
 arnes eval evals/basics -m deepseek/deepseek-v4-flash --label control
@@ -295,15 +305,43 @@ arnes do "make the tests pass" --verify anthropic/claude-haiku-4.5 --yes --panel
 
 Evals append to `~/.arnes/evals.jsonl` (and feed the `runs` scoreboard). A task is one
 JSON file — prompt + optional bash `setup` + a bash `check` whose exit code is the ground
-truth — so adding your own suite is trivial. Three optional keys refine a pass without ever
+truth — so adding your own suite is trivial. Four optional keys refine a pass without ever
 replacing the check: a `rubric` (criteria a judge model scores from the task, the agent's
 report, the diff of the workdir and the check's verdict — never the transcript; `--judge
 <model>`, else the provider's default, else the candidate itself with a `self-grading`
 warning), `limits` (`maxSteps`/`maxCostUSD` cap the run, `maxToolCalls`,
 `forbiddenTools`/`requiredTools` are read from the record; `gate` decides whether they
-fail the trial) and `verify: true` (the loop-1 verifier with `--verify <model>`, recorded —
+fail the trial), `verify: true` (the loop-1 verifier with `--verify <model>`, recorded —
 judged over the same workdir diff the rubric judge reads, and scored against the check in
-`arnes evals`' `verifier` column).
+`arnes evals`' `verifier` column), and a `jev` block — typed questions a decision model
+answers about the same evidence with calibrated probabilities instead of generated text:
+
+```json
+"jev": {
+  "questions": {
+    "grounded":   {"type": "noul",  "instructions": "The report matches what the diff shows.",
+                   "expect": {"min": 0.7}},
+    "discipline": {"type": "choice", "instructions": "What changed beyond the ask?",
+                   "criteria": {"nothing": "only the asked change", "other": "more changed"},
+                   "expect": {"choice": "nothing"}},
+    "quality":    {"type": "score", "instructions": "How good is the fix?",
+                   "criteria": ["wrong", "works but rough", "clean"], "expect": {"min": 1.0}}
+  },
+  "repeats": 3, "gate": true
+}
+```
+
+Each `expect` is checked against the mean across `repeats` (a question without one is
+recorded, never counted); the judge defaults to `typesafe/jev-1.13`, so `arnes eval
+evals/jev -m <model>` needs no flags. A judgment costs ~$0.0004 and takes under a second,
+which is what makes `--judge-repeats`/`"repeats"` affordable — the row then records the
+verdict's own variance (`σ²`), the repeatability figure an LLM judge can't give you
+cheaply. `--judge typesafe/jev-1.13` re-judges plain `rubric` suites through the same API
+(criteria become yes/no questions, met at mean P(yes) ≥ 0.5 — nothing about the task files
+changes), `--second-judge <model>` grades every rubric trial twice and prints an agreement
+block, and `arnes evals judges` reads those pairs back across the whole history. A failed
+decisions call (the API is OpenRouter-only) marks the trial's jev verdict unknown — a gated
+fail with a note, never a crashed run. `evals/jev/` is the worked example of all of it.
 Every trial's transcript is kept under `~/.arnes/eval-sessions/` — `arnes evals transcript
 <id>` prints one — unless `--no-transcripts`; see `evals/graded/`. For CI, `--parallel N`
 runs N trials at once (each has its own workdir, tools and session), `--min-pass 0…1` exits
@@ -369,6 +407,33 @@ The adapter is infrastructure, not a published benchmark score. The recorded
 [A/B results](evals/ab/README.md) cover specific prompts, models, and small task suites;
 they do not establish performance relative to another coding agent.
 Costs and results shown in CLI examples are illustrative.
+
+## Typed decisions (jev)
+
+`arnes decide` asks a System One decision model (`typesafe/jev-1.13`) typed questions about
+any state and gets calibrated probabilities back — no text generation, ~$0.00002 a call:
+
+```bash
+arnes decide "Help! Payouts failing for 3 days." \
+  --questions '{"urgent": {"type": "noul", "instructions": "Is this urgent?"},
+                "team":   {"type": "choice", "instructions": "Who owns it?",
+                           "criteria": {"billing": "payments", "infra": "platform"}}}'
+# decision from typesafe/jev-1.13-20260917 (TypeSafe):
+#   team    choice → billing (p=0.87, confidence 0.81)  [billing=0.87 · infra=0.13]
+#   urgent  noul   → P(yes) = 0.95
+# [$0.000018 · 427 in / 73 out]
+
+arnes decide - --questions q.json --json < ticket.txt   # state on stdin, one JSON document out
+```
+
+Three question types: `noul` (probability a statement is true), `choice` (pick from your
+options, with per-option probabilities), `score` (a position on your 2–10-level rubric).
+In the REPL the same call is `/decide <questions> <state>`; the agent sees the identical
+answer with your next message. The Decisions API is OpenRouter's `POST /api/alpha/decisions`
+(a LiteLLM or other gateway refuses it), and every call lands on the `arnes runs`
+scoreboard. The same model doubles as an **eval judge** — the `jev` task key, the
+`--judge typesafe/jev-1.13` rubric bridge, `--judge-repeats`, and `arnes evals judges`
+above.
 
 ## Code review
 

@@ -29,6 +29,11 @@ public struct EvalModelSummary: Sendable, Equatable {
   public var avgSeconds: Double
   /// Rows that carry an `error` (timeout, thrown run, setup failure…).
   public var errors: Int
+  /// Rows a decisions judge (jev) graded — a `jev` block or the rubric bridge.
+  public var jevGraded: Int
+  /// Mean of the rows' `jevVariance` (the per-repeat score variance); nil when no row was
+  /// judged more than once.
+  public var avgJevVariance: Double?
 
   public var passRate: Double { trials == 0 ? 0 : Double(passed) / Double(trials) }
 
@@ -45,7 +50,9 @@ public struct EvalModelSummary: Sendable, Equatable {
     graderCostUSD: Double,
     avgSteps: Double,
     avgSeconds: Double,
-    errors: Int)
+    errors: Int,
+    jevGraded: Int = 0,
+    avgJevVariance: Double? = nil)
   {
     self.model = model
     self.dialect = dialect
@@ -60,6 +67,8 @@ public struct EvalModelSummary: Sendable, Equatable {
     self.avgSteps = avgSteps
     self.avgSeconds = avgSeconds
     self.errors = errors
+    self.jevGraded = jevGraded
+    self.avgJevVariance = avgJevVariance
   }
 }
 
@@ -163,7 +172,12 @@ public enum EvalReport {
         graderCostUSD: rows.reduce(0) { $0 + ($1.graderCostUSD ?? 0) },
         avgSteps: count == 0 ? 0 : Double(rows.reduce(0) { $0 + $1.steps }) / count,
         avgSeconds: count == 0 ? 0 : rows.reduce(0) { $0 + $1.durationSeconds } / count,
-        errors: rows.filter { $0.error != nil }.count)
+        errors: rows.filter { $0.error != nil }.count,
+        jevGraded: rows.filter { $0.jevScore != nil || $0.jevQuestions != nil }.count,
+        avgJevVariance: {
+          let variances = rows.compactMap(\.jevVariance)
+          return variances.isEmpty ? nil : variances.reduce(0, +) / Double(variances.count)
+        }())
     }
     .sorted {
       if $0.passRate != $1.passRate { return $0.passRate > $1.passRate }
@@ -285,5 +299,102 @@ public struct EvalGate: Sendable, Equatable {
   /// 0 when the gate passes, 2 when it fails.
   public func exitCode(summaries: [EvalModelSummary], regressions: [EvalRegression]) -> Int32 {
     passes(summaries: summaries, regressions: regressions) ? 0 : Self.failedExitCode
+  }
+}
+
+// MARK: - JudgeAlignment
+
+/// One suite × judge-pair of rows both judges graded (`arnes eval --second-judge`):
+/// how often the verdicts agree, and how far the scores sit apart.
+public struct JudgeAlignmentRow: Sendable, Equatable {
+  public var suite: String
+  /// The primary judge (`EvalOutcome.judgeModel`).
+  public var judge: String
+  public var secondJudge: String
+  /// Rows carrying both verdicts.
+  public var trials: Int
+  /// Rows where neither verdict is unknown — the agreement denominator.
+  public var decided: Int
+  /// Decided rows where both said pass or both said fail.
+  public var agreements: Int
+  /// Mean |primary score − second score| over decided rows.
+  public var meanAbsScoreDelta: Double?
+  public var primaryUnknowns: Int
+  public var secondUnknowns: Int
+  /// Mean of the rows' `jevVariance`, where recorded (a decisions judge under repeats).
+  public var meanJevVariance: Double?
+
+  public var agreementRate: Double? {
+    decided == 0 ? nil : Double(agreements) / Double(decided)
+  }
+
+  public init(
+    suite: String,
+    judge: String,
+    secondJudge: String,
+    trials: Int,
+    decided: Int,
+    agreements: Int,
+    meanAbsScoreDelta: Double?,
+    primaryUnknowns: Int,
+    secondUnknowns: Int,
+    meanJevVariance: Double?)
+  {
+    self.suite = suite
+    self.judge = judge
+    self.secondJudge = secondJudge
+    self.trials = trials
+    self.decided = decided
+    self.agreements = agreements
+    self.meanAbsScoreDelta = meanAbsScoreDelta
+    self.primaryUnknowns = primaryUnknowns
+    self.secondUnknowns = secondUnknowns
+    self.meanJevVariance = meanJevVariance
+  }
+}
+
+/// Pure aggregation of dual-judged rows — what `arnes evals judges` prints over the history
+/// and `arnes eval --second-judge` prints over a run. Nothing here reads a file or a clock.
+public enum JudgeAlignment {
+  /// One row per suite × (judge, second judge) pair, over the rows that carry both a rubric
+  /// verdict and a second one. Ordered by suite, then judge, then second judge.
+  public static func compute(_ rows: [EvalOutcome]) -> [JudgeAlignmentRow] {
+    struct Key: Hashable, Comparable {
+      let suite: String
+      let judge: String
+      let second: String
+
+      static func < (lhs: Key, rhs: Key) -> Bool {
+        if lhs.suite != rhs.suite { return lhs.suite < rhs.suite }
+        if lhs.judge != rhs.judge { return lhs.judge < rhs.judge }
+        return lhs.second < rhs.second
+      }
+    }
+    let paired = rows.filter {
+      $0.judgeModel != nil && $0.secondJudgeModel != nil
+        && $0.rubricPassed != nil && $0.secondRubricPassed != nil
+    }
+    let grouped = Dictionary(grouping: paired) {
+      Key(suite: $0.suite, judge: $0.judgeModel ?? "", second: $0.secondJudgeModel ?? "")
+    }
+    return grouped.sorted { $0.key < $1.key }.map { key, group in
+      let decided = group.filter { $0.rubricUnknown != true && $0.secondRubricUnknown != true }
+      let deltas = decided.compactMap { row -> Double? in
+        guard let primary = row.rubricScore, let second = row.secondRubricScore else { return nil }
+        return abs(primary - second)
+      }
+      let variances = group.compactMap(\.jevVariance)
+      return JudgeAlignmentRow(
+        suite: key.suite,
+        judge: key.judge,
+        secondJudge: key.second,
+        trials: group.count,
+        decided: decided.count,
+        agreements: decided.filter { $0.rubricPassed == $0.secondRubricPassed }.count,
+        meanAbsScoreDelta: deltas.isEmpty ? nil : deltas.reduce(0, +) / Double(deltas.count),
+        primaryUnknowns: group.filter { $0.rubricUnknown == true }.count,
+        secondUnknowns: group.filter { $0.secondRubricUnknown == true }.count,
+        meanJevVariance: variances.isEmpty ? nil : variances.reduce(0, +) / Double(variances.count))
+    }
   }
 }

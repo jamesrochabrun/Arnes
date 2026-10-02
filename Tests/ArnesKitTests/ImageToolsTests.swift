@@ -365,16 +365,37 @@ final class ImageToolsTests: XCTestCase {
   func testPendingAttachmentsAreBoundedAcrossTasks() async throws {
     let root = try tempDir()
     defer { try? FileManager.default.removeItem(at: root) }
-    try Self.png(width: 1, height: 1).write(to: root.appendingPathComponent("a.png"))
     let tool = ViewImageTool(root: root)
-    // Each task executes and abandons its attachment; the tasks run one after another so every
-    // one has its own identity for the duration of its call.
-    for _ in 0..<(ViewImageTool.maxPendingTotal + 5) {
-      let task = Task { _ = try? await tool.execute(arguments: ["path": .string("a.png")]) }
-      _ = await task.value
+    let queued = Latch()
+    let release = Latch()
+    let taskCount = ViewImageTool.maxPendingTotal + 5
+    var tasks: [Task<String?, Never>] = []
+    // Keep every task alive until all calls have queued: completed tasks can reuse the same
+    // identity, accidentally exercising the per-task cap instead of the global bound.
+    for index in 0..<taskCount {
+      let filename = "\(index).png"
+      try Self.png(width: 1, height: 1).write(to: root.appendingPathComponent(filename))
+      tasks.append(Task {
+        let result = try? await tool.execute(arguments: ["path": .string(filename)])
+        XCTAssertTrue(result?.hasPrefix("[image attached:") == true)
+        await queued.arrive()
+        await release.wait(for: 1)
+        guard case .text(let caption, _)? = await tool.takeAttachment(callId: filename)?.parts.first else { return nil }
+        return caption
+      })
+      // Serialize insertion order without completing the tasks, and check the cap at every
+      // insertion, before takeAttachment can sweep away evidence of an overflow.
+      await queued.wait(for: index + 1)
+      XCTAssertEqual(tool.pendingAttachmentCount, min(index + 1, ViewImageTool.maxPendingTotal))
     }
-    XCTAssertLessThanOrEqual(tool.pendingAttachmentCount, ViewImageTool.maxPendingTotal)
-    XCTAssertGreaterThan(tool.pendingAttachmentCount, 0)
+    await release.arrive()
+    for (index, task) in tasks.enumerated() {
+      let caption = await task.value
+      let expected = index < taskCount - ViewImageTool.maxPendingTotal
+        ? nil : "Image from view_image \(root.appendingPathComponent("\(index).png").path):"
+      XCTAssertEqual(caption, expected, "the oldest attachments are evicted first")
+    }
+    XCTAssertEqual(tool.pendingAttachmentCount, 0)
   }
 
   // MARK: Images and a model without vision

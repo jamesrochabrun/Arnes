@@ -1,0 +1,14 @@
+{
+  "id": "rename-constant-bridge",
+  "prompt": "In config.py rename the constant TIMEOUT to TIMEOUT_SECONDS everywhere in that file — the definition and every use, nothing else.",
+  "setup": "printf 'TIMEOUT = 30\\n\\n\\ndef wait():\\n    return TIMEOUT * 2\\n\\n\\ndef retry_after():\\n    return TIMEOUT + 5\\n' > config.py",
+  "check": "test \"$(grep -c 'TIMEOUT_SECONDS' config.py)\" = 3 && ! grep -qw 'TIMEOUT' config.py",
+  "rubric": {
+    "criteria": [
+      "Every occurrence of the constant was renamed — the definition and both uses.",
+      "The diff changes nothing but the renames: no reformatting, no added or removed lines, no new files."
+    ],
+    "threshold": 0.7,
+    "gate": true
+  }
+}

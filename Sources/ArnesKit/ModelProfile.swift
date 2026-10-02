@@ -32,6 +32,14 @@ public struct ModelProfile: Codable, Sendable {
   /// model fails the *whole* request, so the safe assumption is "no images" — the tool is simply
   /// absent, and a run works exactly as it did before the tool existed.
   public let supportsVision: Bool
+  /// Whether the model answers through the Decisions API (OpenRouter `architecture.
+  /// output_modalities` contains `decisions` — or, for an older manifest, the `modality`
+  /// string's output side does). What lets a judge model route through `decide` instead of
+  /// chat. **The second capability assumed off when the manifest is silent** (like
+  /// `supportsVision`): a decisions request to a chat model — or a chat request to a
+  /// decisions model — fails the *whole* request, so the safe assumption is "chat", and off
+  /// only means the decisions path doesn't trigger.
+  public let isDecisionModel: Bool
 
   public init(model: OpenRouterModel) {
     id = model.id
@@ -48,6 +56,7 @@ public struct ModelProfile: Codable, Sendable {
     maxCompletionTokens = model.topProvider?.maxCompletionTokens
     supportsMaxCompletionTokens = model.supportedParameters.map { $0.contains("max_completion_tokens") }
     supportsVision = Self.acceptsImages(model.architecture)
+    isDecisionModel = Self.emitsDecisions(model.architecture)
   }
 
   /// A manifest price, or nil when the manifest isn't stating one. A router alias prices its
@@ -76,6 +85,17 @@ public struct ModelProfile: Codable, Sendable {
     return input.split(separator: "+").contains { $0.trimmingCharacters(in: .whitespaces) == "image" }
   }
 
+  /// `output_modalities` when the manifest has it; else the output side of the legacy
+  /// `modality` string (`text->decisions`). Neither → false.
+  static func emitsDecisions(_ architecture: OpenRouterModel.Architecture?) -> Bool {
+    if let modalities = architecture?.outputModalities {
+      return modalities.contains { $0.lowercased() == "decisions" }
+    }
+    guard let modality = architecture?.modality?.lowercased() else { return false }
+    guard let output = modality.components(separatedBy: "->").dropFirst().last else { return false }
+    return output.split(separator: "+").contains { $0.trimmingCharacters(in: .whitespaces) == "decisions" }
+  }
+
   /// A profile from another router's manifest (LiteLLM `/model/info`, …). The family
   /// defaults to what the id's author prefix says; pass one when the manifest knows
   /// better (a gateway alias like `sonnet` carries no prefix).
@@ -90,7 +110,8 @@ public struct ModelProfile: Codable, Sendable {
     completionPricePerToken: Double?,
     maxCompletionTokens: Int? = nil,
     supportsVision: Bool = false,
-    supportsMaxCompletionTokens: Bool? = nil)
+    supportsMaxCompletionTokens: Bool? = nil,
+    isDecisionModel: Bool = false)
   {
     self.id = id
     let resolvedFamily = family ?? ModelFamily(modelId: id)
@@ -105,6 +126,7 @@ public struct ModelProfile: Codable, Sendable {
     self.maxCompletionTokens = maxCompletionTokens
     self.supportsVision = supportsVision
     self.supportsMaxCompletionTokens = supportsMaxCompletionTokens
+    self.isDecisionModel = isDecisionModel
   }
 
   /// Minimal profile for a model the manifest doesn't know (`openrouter/auto`, a gateway
@@ -125,6 +147,7 @@ public struct ModelProfile: Codable, Sendable {
     maxCompletionTokens = nil
     supportsMaxCompletionTokens = nil
     supportsVision = false
+    isDecisionModel = false
   }
 }
 
